@@ -321,6 +321,15 @@ the money just to break even -- while the model's own calibration error is still
 Note the spread barely registers (4.3% -> 4.5%, and it *rises* because paying up
 changes which trades qualify); it is the fee that takes a third of the return.
 
+`research/evaluate.py` corroborates this from live *recorded books* rather than
+reconstructed ones -- real top-of-book with depth, captured by `collect.py`.
+Over a 10-window capture (far too small for the ROI to mean anything, so read
+only the spread statistics): median book spread **1.0c**, and the model's
+disagreement with the midpoint runs a median of **1.8c** and a mean absolute of
+**6.4c**. The model is routinely claiming several times the entire cost of
+crossing, against a price it cannot out-forecast. That gap is the error, not
+the edge.
+
 ### Should it trade the last 30 seconds?
 
 **No.** The sibling `polymarket-whale-tracker` repo found sophisticated actors

@@ -31,7 +31,13 @@ WINDOW_SECONDS = 300
 
 
 def load_klines(session, start_ms: int, end_ms: int, interval: str) -> dict[int, float]:
-    """Binance kline closes keyed by second. Paged to cover the whole span."""
+    """Binance closes keyed by the FIRST second at which the close is known.
+
+    k[6] is the bar's close time (end of bar minus 1ms), so `k[6]//1000 + 1` is
+    the first second the close is public. Keying by k[0] (open time) while
+    storing the close price -- which this used to do -- dates every price one
+    bar early and leaks that much lookahead into the comparison.
+    """
     out: dict[int, float] = {}
     cur = start_ms
     while cur < end_ms:
@@ -43,7 +49,7 @@ def load_klines(session, start_ms: int, end_ms: int, interval: str) -> dict[int,
         if not ks:
             break
         for k in ks:
-            out[int(k[0]) // 1000] = float(k[4])
+            out[int(k[6]) // 1000 + 1] = float(k[4])
         nxt = int(ks[-1][0]) + 1
         if nxt <= cur:
             break
@@ -58,6 +64,17 @@ def nearest(price_map: dict[int, float], ts: int, tol: int = 10) -> float | None
         if ts + d in price_map:
             return price_map[ts + d]
     return None
+
+
+def strike_at(spot: dict[int, float], window_ts: int, lookback: int = 60) -> float | None:
+    """TWAP of the `lookback` seconds before the open, matching the oracle.
+
+    A point-in-time open against a point-in-time close reproduces Polymarket's
+    settled direction 90.9% of the time over 230 windows; TWAP against TWAP
+    manages 98.3%. See polymarket.get_strike.
+    """
+    vals = [spot[t] for t in range(window_ts - lookback, window_ts) if t in spot]
+    return sum(vals) / len(vals) if vals else None
 
 
 def fetch_outcomes(session, window_tss) -> dict[int, str]:
@@ -158,14 +175,14 @@ def main(path, ewma_halflife, bar_interval):
     print(f"{len(samples)} samples, {len({s['window_ts'] for s in samples})} windows")
     session = requests.Session()
 
-    lo = int(min(s["ts"] for s in samples)) - 3600
+    lo = int(min(s["ts"] for s in samples)) - 3660
     hi = int(max(s["ts"] for s in samples)) + 400
     print("loading Binance 1s klines...")
     spot = load_klines(session, lo * 1000, hi * 1000, "1s")
     print(f"  {len(spot)} 1s closes")
 
     wtss = {s["window_ts"] for s in samples}
-    strikes = {w: nearest(spot, w) for w in wtss}
+    strikes = {w: strike_at(spot, w) for w in wtss}
     strikes = {w: v for w, v in strikes.items() if v}
     print("fetching settled outcomes...")
     outcomes = fetch_outcomes(session, wtss)
