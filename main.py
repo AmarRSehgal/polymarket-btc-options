@@ -13,6 +13,7 @@ Usage:
 import asyncio
 import logging
 import signal
+import time
 
 import click
 from rich.console import Console
@@ -21,7 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from feed import BinanceFeed
-from polymarket import PolymarketClient
+from polymarket import WINDOW_SECONDS, PolymarketClient
 from pricer import binary_call_price, edge_cents, taker_fee_per_share, twap_effective_seconds
 from simulator import Simulator
 from vol import VolEstimator
@@ -87,7 +88,6 @@ class EdgeFinder:
     async def _poll_polymarket(self):
         while True:
             try:
-                await self._settle_pending()
                 market = await asyncio.to_thread(self.poly.get_market)
                 if market:
                     self._market = market
@@ -106,38 +106,52 @@ class EdgeFinder:
                     prices = await asyncio.to_thread(self.poly.get_prices, market)
                     if prices:
                         self._prices = prices
-                        self._try_trades(prices)
+                        self._try_trades(market, prices)
             except Exception as e:
                 logger.error("Polymarket poll error: %s", e)
             await asyncio.sleep(3)
 
-    async def _settle_pending(self):
-        """Resolve closed windows against Polymarket's own settlement."""
-        still_open = []
-        for wts in self._pending_resolution:
-            outcome = await asyncio.to_thread(self.poly.get_settled_outcome, wts)
-            if outcome is None:
-                still_open.append(wts)
-            else:
-                self.sim.resolve_window(wts, outcome)
-        self._pending_resolution = still_open
+    async def _settle_loop(self):
+        """Resolve closed windows against Polymarket's own settlement.
+
+        Kept off the polling task: settlement is a REST lookup per pending
+        window and a window does not resolve for the better part of a minute
+        after it closes, so running it inline delayed every trading decision
+        behind lookups that were almost always going to return None.
+        """
+        while True:
+            try:
+                still_open = []
+                for wts in self._pending_resolution:
+                    outcome = await asyncio.to_thread(self.poly.get_settled_outcome, wts)
+                    if outcome is None:
+                        still_open.append(wts)
+                    else:
+                        self.sim.resolve_window(wts, outcome)
+                self._pending_resolution = still_open
+            except Exception as e:
+                logger.error("Settlement poll error: %s", e)
+            await asyncio.sleep(15)
 
     def _model_up(self, remaining: float) -> float:
         """P(Up) accounting for the trailing-TWAP settlement."""
         t_eff = twap_effective_seconds(remaining, self._twap_lookback)
         return binary_call_price(self._price, self._strike, t_eff, self.vol.annual_vol)
 
-    def _try_trades(self, prices):
+    def _try_trades(self, market, prices):
         if not self._clean_strike or not self._price or not self._strike:
             return
 
-        remaining = self.poly.time_remaining()
+        # Time and window come from the market these books belong to. Asking
+        # the clock again here would, on a boundary roll during the ~1s fetch,
+        # book a trade against the new window at the old window's quotes.
+        window_ts = market.window_ts
+        remaining = window_ts + WINDOW_SECONDS - time.time()
         if remaining <= 0:
             return
 
         model_up = self._model_up(remaining)
         model_down = 1.0 - model_up
-        window_ts = self.poly.current_window_ts()
 
         vol_ready = self.vol.bar_count >= self.vol.ewma_halflife
         pos = self.sim.try_trade(window_ts, "up", prices.up_ask, model_up, remaining,
@@ -282,6 +296,7 @@ class EdgeFinder:
     async def run(self):
         feed_task = asyncio.create_task(self.feed.run())
         poly_task = asyncio.create_task(self._poll_polymarket())
+        settle_task = asyncio.create_task(self._settle_loop())
 
         stop = asyncio.Event()
 
@@ -296,9 +311,9 @@ class EdgeFinder:
                 live.update(self._build_display())
                 await asyncio.sleep(0.5)
 
-        feed_task.cancel()
-        poly_task.cancel()
-        await asyncio.gather(feed_task, poly_task, return_exceptions=True)
+        for task in (feed_task, poly_task, settle_task):
+            task.cancel()
+        await asyncio.gather(feed_task, poly_task, settle_task, return_exceptions=True)
 
 
 @click.command()
