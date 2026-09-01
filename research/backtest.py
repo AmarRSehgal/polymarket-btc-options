@@ -412,12 +412,14 @@ def _load(path):
 @click.option("--extra-cost", default=0.0, help="Extra cents/share of slippage beyond the print")
 @click.option("--min-edge", default=0.0, help="Require at least this much edge net of costs")
 @click.option("--ewma-halflife", default=30)
+@click.option("--constant-vol", default=0.0,
+              help="Replace the EWMA with a fixed annual vol, to ablate the estimator")
 @click.option("--permute", default=0, help="Permutation rounds for a significance null (0 = skip)")
 @click.option("--permute-vs-lag", default=30, help="Lag to measure the freshness gradient against")
 @click.option("--cache", default=str(DEFAULT_CACHE), help="Where to cache the pulled data")
 @click.option("--refresh", is_flag=True, help="Re-pull even if the cache exists")
-def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, permute,
-         permute_vs_lag, cache, refresh):
+def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, constant_vol,
+         permute, permute_vs_lag, cache, refresh):
     """Backtest the model against settled Polymarket windows."""
     cache_path = pathlib.Path(cache)
     if cache_path.exists() and not refresh:
@@ -436,6 +438,11 @@ def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, permute
           f"{len(closes)} 1m bars, {len(spot):,} 1s bars")
 
     sigma_at, vol = build_sigma(closes, ewma_halflife)
+    if constant_vol > 0:
+        # Ablation: keep the warm-up mask so the trade set is comparable, but
+        # replace every estimate with one fixed number.
+        sigma_at = {k: (constant_vol if v is not None else None)
+                    for k, v in sigma_at.items()}
     obs = observations(ws, sigma_at, spot, ewma_halflife, lag, use_twap=True)
     obs_pit = observations(ws, sigma_at, spot, ewma_halflife, lag, use_twap=False)
     if not obs:
@@ -446,8 +453,9 @@ def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, permute
     spreads = sorted(a - b for _m, _mid, a, b, _f, _w, _r in both)
     print(f"{len(obs):,} observable seconds ({len(both):,} two-sided), implied spread "
           f"median {spreads[len(spreads)//2]*100:.1f}c mean {statistics.mean(spreads)*100:.1f}c")
-    print(f"EWMA annual vol at end of sample: {vol.annual_vol*100:.1f}%   "
-          f"BTC feed lag applied: {lag}s\n")
+    sigma_label = (f"CONSTANT {constant_vol*100:.0f}% (EWMA ablated)" if constant_vol > 0
+                   else f"EWMA halflife {ewma_halflife}, {vol.annual_vol*100:.1f}% at end of sample")
+    print(f"sigma: {sigma_label}   BTC feed lag applied: {lag}s\n")
 
     market = [(mid, won) for _m, mid, _a, _b, _f, won, _r in both]
     model = [(m, won) for m, _mid, _a, _b, _f, won, _r in both]

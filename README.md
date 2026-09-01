@@ -448,9 +448,33 @@ in the wings, which is exactly the calibration error measured above. (Kurtosis i
 dominated by a handful of prints and is not stable across samples -- an earlier
 14-day window read 29.2. Its instability is itself the point.)
 
-**The estimator is not the binding constraint, though.** Even a perfect vol
-number would not create edge: the market price is already the better forecast,
-and the only thing that pays is seeing BTC before the quote moves.
+### Does the EWMA earn its keep?
+
+Yes, and this is the one place the machinery is *not* wasted -- worth stating
+plainly, because it would be easy to over-read the rest of this README as
+"nothing in the model matters." Ablating the estimator to a fixed number
+(`--constant-vol`), everything else held identical:
+
+| sigma source | Brier | trades | ROI | win% |
+|---|---|---|---|---|
+| **EWMA, half-life 30 (shipped)** | **0.1557** | 9,080 | **+3.2%** | 57.4% |
+| constant 15% | 0.1639 | 14,609 | +0.8% | 78.7% |
+| constant 20% | 0.1595 | 13,538 | +1.1% | 76.7% |
+| constant 31% *(the sample's own realised vol -- hindsight)* | 0.1581 | 9,956 | +0.6% | 60.4% |
+| constant 45% | 0.1631 | 9,679 | -3.3% | 36.9% |
+| constant 60% | 0.1703 | 10,440 | -4.9% | 27.5% |
+
+The EWMA beats every constant, including one chosen with hindsight to equal the
+sample's realised vol. And the code's own 50% warm-up placeholder sits between
+the 45% and 60% rows -- both firmly negative, which is why the simulator refuses
+to trade before the estimator has warmed up. Half-life is not a sensitive knob:
+30 and 60 are indistinguishable (Brier 0.1557 vs 0.1555), 5 and 10 are slightly
+worse.
+
+**But it is not the binding constraint.** Even the best sigma here leaves the
+model behind the market price on Brier. The estimator is doing real work; it is
+just not enough work to overcome a better-informed counterparty and a 1.75c fee,
+and the only thing that actually pays is seeing BTC before the quote moves.
 
 ## Testing
 
@@ -470,6 +494,9 @@ python3 research/backtest.py --permute 100   # significance vs an outcome-shuffl
 
 # Vol estimator scale and shape diagnostics
 python3 research/voldiag.py --days 14
+
+# Ablate the vol estimator to a fixed number
+python3 research/backtest.py --constant-vol 0.31
 
 # Record live books, then grade them under a cost ladder
 python3 research/collect.py --minutes 30 --out research/data/run.jsonl
