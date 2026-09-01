@@ -243,3 +243,13 @@ def test_strike_returns_zero_when_binance_has_no_bars():
     client = PolymarketClient()
     client._session = _KlineSession([])
     assert client.get_strike(1_000_000) == 0.0
+
+
+def test_settlement_is_not_polled_before_gamma_could_have_resolved():
+    """Gamma takes 4-9 minutes; asking sooner is a guaranteed wasted call."""
+    import time as _time
+    now = _time.time()
+    just_closed = int(now) - 300          # closed this instant
+    long_closed = int(now) - 300 - 600    # closed ten minutes ago
+    assert PolymarketClient.can_be_settled(just_closed) is False
+    assert PolymarketClient.can_be_settled(long_closed) is True

@@ -57,10 +57,10 @@ class Simulator:
         self.max_exposure_per_market = max_exposure_per_market
         self.max_loss_per_window = max_loss_per_window
         # The per-window cap is not a portfolio cap. A window keeps its
-        # positions until Gamma reports it settled, which lags the close by
-        # the better part of a minute, so two or three windows are routinely
-        # open at once -- a live 36-minute run held $14.57 against a "$5 per
-        # market" limit. Bound the total explicitly.
+        # positions until Gamma reports it settled, and that lags the close by
+        # four to nine minutes -- one to two whole windows -- so two or three
+        # windows are routinely open at once. A live 36-minute run held $14.57
+        # against a "$5 per market" limit. Bound the total explicitly.
         self.max_open_exposure = (3.0 * max_exposure_per_market
                                   if max_open_exposure is None else max_open_exposure)
 

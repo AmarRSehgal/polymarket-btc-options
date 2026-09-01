@@ -115,14 +115,18 @@ class EdgeFinder:
         """Resolve closed windows against Polymarket's own settlement.
 
         Kept off the polling task: settlement is a REST lookup per pending
-        window and a window does not resolve for the better part of a minute
-        after it closes, so running it inline delayed every trading decision
-        behind lookups that were almost always going to return None.
+        window, and Gamma takes four to nine minutes to mark a window resolved,
+        so running it inline delayed every trading decision behind lookups that
+        were almost always going to return None. Windows too young to have
+        settled are not queried at all.
         """
         while True:
             try:
                 still_open = []
                 for wts in self._pending_resolution:
+                    if not self.poly.can_be_settled(wts):
+                        still_open.append(wts)
+                        continue
                     outcome = await asyncio.to_thread(self.poly.get_settled_outcome, wts)
                     if outcome is None:
                         still_open.append(wts)

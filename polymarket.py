@@ -23,6 +23,12 @@ WINDOW_SECONDS = 300
 DEFAULT_TWAP_LOOKBACK = 60.0
 DEFAULT_FEE_RATE = 0.07
 
+# Gamma does not flag a window `closed` the instant it ends. Sampled 2026-09-01,
+# a window 213s past its close was still open while one 513s past was resolved,
+# so settlement lands somewhere between four and nine minutes -- one to two full
+# windows, not seconds. Asking before this has elapsed is a guaranteed miss.
+MIN_SETTLEMENT_LAG = 240.0
+
 
 class Market:
     __slots__ = (
@@ -234,11 +240,17 @@ class PolymarketClient:
             logger.error("Failed to fetch strike: %s", e)
             return 0.0
 
+    @staticmethod
+    def can_be_settled(window_ts: int) -> bool:
+        """False while the window is too young for Gamma to have resolved it."""
+        return time.time() >= window_ts + WINDOW_SECONDS + MIN_SETTLEMENT_LAG
+
     def get_settled_outcome(self, window_ts: int) -> str | None:
         """'up'/'down' once Polymarket has resolved the window, else None.
 
-        Grading against Binance close-vs-open instead of this is wrong on ~1 in
-        20 windows overall and ~1 in 3 of the near-the-money ones.
+        Grading against a local Binance comparison instead of this is wrong on
+        ~1 in 60 windows even with the best TWAP reconstruction, and on ~1 in 3
+        of the near-the-money ones if you use a point-in-time price.
         """
         try:
             resp = self._session.get(
