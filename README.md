@@ -7,15 +7,19 @@ Live edge detection for Polymarket's BTC 5-minute Up/Down markets using Black-Sc
 > Over 230 settled windows and 460,266 real fills:
 >
 > 1. The market's own price predicts the settlement **better than the model**
->    (Brier 0.155 vs 0.162, and better on log-loss and calibration too). That
+>    (Brier 0.1549 vs 0.1557, and better on log-loss and calibration too). That
 >    test assumes no costs at all, so nothing downstream of it can rescue the
 >    strategy.
-> 2. Post-cost ROI is a smooth, monotonic function of BTC feed lag -- and an
->    outcome-permutation test says the **lag gradient is real (7.2 sd) while the
->    profit level at any single lag is not (0.9 sd)**. The honest summary is
->    "latency pays, this model does not", not "+4.8% ROI".
-> 3. In the last 30 seconds the model wins **10%** of its trades. The
+> 2. Post-cost ROI is a smooth, monotonic function of BTC feed lag, and
+>    **break-even is about 5 seconds of staleness** -- against a tool whose own
+>    decision cadence is ~3.5-4s. A permutation test puts the freshness gradient
+>    at 8.6 sd and the profit level at 3.3 sd, so the honest summary is "latency
+>    pays, this model does not."
+> 3. In the last 30 seconds the model wins **4.4%** of its trades. The
 >    no-trades-in-last-30s rule is the most protective line in the file.
+> 4. The biggest single improvement available was not in the model at all: using
+>    a 60-second TWAP for the strike instead of a spot print took settlement
+>    reconstruction from 90.9% to **98.3%** accurate.
 >
 > See [Does the edge exist?](#does-the-edge-exist) before trusting any number
 > this tool prints. It remains a simulator and places no real orders.
@@ -85,7 +89,7 @@ Polymarket API  ──> polymarket.py (market discovery) ───────�
 | `research/voldiag.py` | Scale/shape diagnostics for the vol estimator |
 | `research/collect.py` | Record live books to JSONL |
 | `research/evaluate.py` | Grade a recording under a cost ladder |
-| `test_pricing.py` | Unit tests (19) |
+| `test_pricing.py` | Unit tests (22) |
 
 ## Usage
 
@@ -190,7 +194,32 @@ transacted at that second. Over 230 settled windows this gives 460,266 fills and
 20,101 observable seconds, with a median implied spread of **1.0c** -- matching
 the live book.
 
-### The model is worse than the price it is trading against
+### The strike matters more than anything in the model
+
+Before any of that: the model needs a strike, and the market's strike is a
+Chainlink `btc-usd-twap-60s` print with no free feed. Which Binance statistic
+you substitute dominates everything downstream. Reconstructing settlement over
+the 230 windows and checking the implied direction against Polymarket's own
+resolution:
+
+| open -> close | all | near-the-money |
+|---|---|---|
+| point-in-time -> point-in-time | 90.9% | 68.3% |
+| point-in-time -> 60s TWAP | 95.2% | 82.9% |
+| **60s TWAP -> 60s TWAP** | **98.3%** | **92.7%** |
+| 60s TWAP -> point-in-time | 93.0% | 75.6% |
+
+("near-the-money" = the 41 windows whose total move was under $20.) `get_strike()`
+used to return a single 1s kline close -- the worst row. It now averages the 60
+seconds before the open, matching what the oracle itself averages, which cuts
+the basis error by more than half overall and by three quarters in the regime
+this tool actually trades. Every number below uses the TWAP strike; on the
+point-in-time strike the model's Brier was 0.1617 rather than 0.1557.
+
+A residual basis remains -- Chainlink aggregates several venues, and 1.7% of
+windows still resolve against the best Binance-only reconstruction.
+
+### The model is still worse than the price it is trading against
 
 This test needs no cost assumptions at all. If the model predicts the settlement
 worse than the market price does, there is nothing to extract and the cost
@@ -199,67 +228,65 @@ ladder is moot.
 | series | Brier | log-loss | calibration error |
 |---|---|---|---|
 | **market mid** | **0.1549** | **0.4725** | **0.0201** |
-| model (TWAP-aware) | 0.1617 | 0.4931 | 0.0417 |
-| model (point-in-time) | 0.1642 | 0.4987 | 0.0619 |
+| model (TWAP-aware) | 0.1557 | 0.4777 | 0.0336 |
+| model (point-in-time settle) | 0.1590 | 0.4870 | 0.0524 |
 
-The market wins on all three. The model is systematically under-confident --
-it says 0.75 where reality is 0.84, and 0.65 where reality is 0.71 -- which
-points it at the *losing* side of correctly-priced markets. (Modelling the TWAP
-settlement helps, 0.062 -> 0.042 calibration error, but does not close the gap.)
+With a correct strike and a TWAP-aware settlement the model gets *close* --
+0.1557 against 0.1549 -- but it does not get in front, and it is still half
+again as badly calibrated. It remains under-confident in the upper middle: it
+says 0.65 where reality is 0.71, and 0.75 where reality is 0.80, which points it
+at the losing side of correctly-priced markets.
 
-### What is left is feed latency, and it decays in seconds
+### What is left is feed latency, and break-even is about five seconds
 
 Degrade the BTC feed and watch what happens. Only the Binance price is delayed;
 the market prints are always read at the true second, so this isolates freshness.
 
 | BTC feed lag | model Brier | trades | stake | P&L | ROI | win% |
 |---|---|---|---|---|---|---|
-| **-30s** *(future BTC -- placebo)* | 0.1425 | 11,913 | $6,288 | +$1,079.69 | **+17.2%** | 61.8% |
-| -10s *(future BTC -- placebo)* | 0.1548 | 11,090 | $5,760 | +$590.85 | +10.3% | 57.3% |
-| 0s | 0.1617 | 10,570 | $5,308 | +$255.09 | +4.8% | 52.6% |
-| 5s | 0.1640 | 10,453 | $5,142 | +$172.08 | +3.3% | 50.8% |
-| 10s | 0.1675 | 10,666 | $5,117 | +$122.02 | +2.4% | 49.1% |
-| 15s | 0.1710 | 10,847 | $5,108 | +$69.46 | +1.4% | 47.7% |
-| 30s | 0.1831 | 11,364 | $4,952 | +$17.93 | +0.4% | 43.7% |
-| 60s | 0.2059 | 12,232 | $4,560 | +$8.75 | +0.2% | 37.4% |
+| **-30s** *(future BTC -- placebo)* | 0.1366 | 11,874 | $6,687 | +$1,222.64 | **+18.3%** | 66.6% |
+| -10s *(future BTC -- placebo)* | 0.1486 | 10,362 | $5,890 | +$658.17 | +11.2% | 63.2% |
+| 0s | 0.1557 | 9,080 | $5,053 | +$162.96 | +3.2% | 57.4% |
+| 5s | 0.1580 | 8,942 | $4,859 | +$2.99 | **+0.1%** | 54.4% |
+| 10s | 0.1611 | 9,473 | $4,990 | -$53.16 | -1.1% | 52.1% |
+| 15s | 0.1645 | 9,884 | $5,073 | -$92.65 | -1.8% | 50.4% |
+| 30s | 0.1763 | 10,697 | $4,953 | -$101.68 | -2.1% | 45.3% |
+| 60s | 0.1982 | 11,737 | $4,568 | -$148.39 | -3.2% | 37.7% |
 
 Read the negative-lag rows as a placebo: handing the model BTC from 30 seconds
-in the future buys 17.2% ROI, which is what pure direction-knowledge is worth
+in the future buys 18.3% ROI, which is what pure direction-knowledge is worth
 here. The return is a smooth function of feed freshness with no kink at the
-model -- **it is latency, and Black-Scholes plays no part in it.** Note also
-that model Brier only beats the market's 0.1549 at *negative* lag. At 0s it is
-already losing, and the residual +4.8% is the tail of the same latency effect:
-a fill printed at second `t` reflects a decision its taker made some seconds
-earlier, while the Binance 1s close at `t` is the freshest mark obtainable.
+model -- **it is latency, and Black-Scholes plays no part in it.**
 
-**Break-even is around 10-15 seconds of staleness.** For comparison, `get_prices()`
-now takes ~0.4-0.8s and the poll loop sleeps 3s, so the live tool's decision
-cadence is ~3.5-4s -- inside break-even, but for maybe a percent or two of ROI
-before slippage, size limits, and the fact that the model is the worse predictor.
+**Break-even is about five seconds of staleness.** That is the number that
+kills this design. `get_prices()` now takes ~0.4-0.8s and the poll loop sleeps
+3s, so the tool's own decision cadence is **~3.5-4s** -- inside break-even, but
+with essentially no headroom, before slippage, the 5-share minimum, or the fact
+that the model is still the worse forecaster.
 
 ### How much of this is noise?
 
-Most of the level; almost none of the gradient. Every trade inside a window
+Some of the level; almost none of the gradient. Every trade inside a window
 settles on that window's single outcome, so the effective sample size is **230
-windows, not 10,570 trades** -- treating trades as independent overstates
+windows, not 9,080 trades** -- treating trades as independent overstates
 significance by more than an order of magnitude. `--permute` shuffles outcomes
 across windows, which preserves the trade selection and the prices while
 breaking the link to what happened:
 
 ```
 SIGNIFICANCE (100 outcome permutations; n = 230 windows, NOT the trade count)
-  ROI at 0s            real +4.81%   null -0.38% +/- 5.49   -> 0.9 sd
-  gradient 0s vs 30s   real +4.44pp  null -15.14pp +/- 2.71 -> 7.2 sd
+  ROI at 0s            real +3.23%   null -9.94% +/- 3.95   -> 3.3 sd
+  gradient 0s vs 30s   real +5.28pp  null -18.14pp +/- 2.71 -> 8.6 sd
 ```
 
-So **the +4.8% is not distinguishable from noise** (split-half confirms it:
-+1.2% on the first 115 windows, +9.5% on the second). What *is* solid is the
-freshness gradient, which is paired across the same windows and lands 7.2 sd
-from its null. Note the null is not centred on zero -- the model selects
-different trades at different lags, so the bias has to be measured rather than
-assumed, which is the whole reason for the permutation rather than a t-test.
+Split-half agrees the level is now reasonably stable (+4.3% on the first 115
+windows, +1.6% on the second; on the old point-in-time strike it was +1.2% then
++9.5%). Note the null is not centred on zero -- the model selects different
+trades at different lags, so the bias has to be measured rather than assumed,
+which is the whole reason for a permutation rather than a t-test.
 
-Read that as the finding: **latency pays; this model does not.** Reproduce with
+So a real but small effect at zero lag, and a much stronger freshness gradient.
+Read it as: **latency pays; the model does not.** Reproduce with
 `python3 research/backtest.py --permute 100`.
 
 ### Is it the spread or the fee?
@@ -268,16 +295,16 @@ The fee, by a factor of three, and neither is the real problem.
 
 | variant | trades | stake | P&L | ROI | win% |
 |---|---|---|---|---|---|
-| mid, no fee *(what the original tool displayed)* | 9,790 | $4,729 | +$379.95 | +8.0% | 52.2% |
-| ask, no fee *(pay the spread)* | 11,731 | $5,829 | +$435.57 | +7.5% | 53.4% |
-| ask + taker fee | 10,570 | $5,308 | +$255.09 | +4.8% | 52.6% |
+| mid, no fee *(what the original tool displayed)* | 9,579 | $5,061 | +$220.04 | +4.3% | 55.1% |
+| ask, no fee *(pay the spread)* | 11,249 | $6,148 | +$274.02 | +4.5% | 57.1% |
+| ask + taker fee | 9,080 | $5,053 | +$162.96 | +3.2% | 57.4% |
 
 The book quotes a median **1c** spread, so the half-spread is 0.5c. The taker fee
 peaks at **1.75c/share** at the money. Together ~2.25c of true edge is needed at
-the money just to break even -- while the model's own calibration error is 2-9
-*cents*. The model will keep finding "edge" that is its own error. The original
-display's "edge" against an untradeable midpoint with no fee overstates the
-result by 3.2 points of ROI, and the whole of that remaining 4.8% is latency.
+the money just to break even -- while the model's own calibration error is still
+3.4 *cents* on average. The model will keep finding "edge" that is its own error.
+Note the spread barely registers (4.3% -> 4.5%, and it *rises* because paying up
+changes which trades qualify); it is the fee that takes a third of the return.
 
 ### Should it trade the last 30 seconds?
 
@@ -288,21 +315,24 @@ It does not. It is the single most protective rule in the file:
 
 | remaining | obs | trades | stake | P&L | ROI | win% | Brier (model) | Brier (market) |
 |---|---|---|---|---|---|---|---|---|
-| **0-30s** | 1,187 | 271 | $28.90 | **-$1.90** | **-6.6%** | **10.0%** | 0.2221 | **0.0338** |
-| 30-60s | 1,682 | 322 | $137.52 | +$1.48 | +1.1% | 43.2% | 0.0746 | 0.0405 |
-| 60-120s | 3,848 | 1,527 | $963.64 | +$38.36 | +4.0% | 65.6% | 0.1058 | 0.0946 |
-| 120-180s | 4,733 | 2,489 | $1,434.45 | +$99.55 | +6.9% | 61.6% | 0.1376 | 0.1339 |
-| 180-240s | 4,601 | 3,011 | $1,469.55 | +$90.45 | +6.2% | 51.8% | 0.1679 | 0.1669 |
-| 240-300s | 4,050 | 2,950 | $1,273.85 | +$27.15 | +2.1% | 44.1% | 0.2279 | 0.2241 |
+| **0-30s** | 1,187 | 203 | $11.71 | **-$2.71** | **-23.1%** | **4.4%** | 0.1210 | **0.0338** |
+| 30-60s | 1,682 | 189 | $80.64 | +$8.36 | +10.4% | 47.1% | 0.0431 | 0.0405 |
+| 60-120s | 3,848 | 1,337 | $909.96 | +$5.04 | +0.6% | 68.4% | 0.0966 | 0.0946 |
+| 120-180s | 4,733 | 2,382 | $1,471.02 | +$10.98 | +0.7% | 62.2% | 0.1347 | 0.1339 |
+| 180-240s | 4,601 | 2,683 | $1,474.91 | +$57.09 | +3.9% | 57.1% | 0.1669 | 0.1669 |
+| 240-300s | 4,050 | 2,286 | $1,104.79 | +$84.21 | +7.6% | 52.0% | 0.2221 | 0.2241 |
 
-In the final 30 seconds this model wins **10% of its trades**. The reason is
+In the final 30 seconds this model wins **4.4% of its trades**. The reason is
 structural, not bad luck: by then the 60-second TWAP is more than half realised,
 so the settlement value is largely already determined and the market price is
 close to a fact (Brier **0.034**, versus 0.155 over the window as a whole). The
 model cannot observe the running average -- `twap_effective_seconds` explicitly
-assumes none of it is realised -- so it is guessing (Brier 0.222) against a
-price that is nearly right, and disagreement with a nearly-right price is
-simply being wrong.
+assumes none of it is realised -- so it is guessing against a price that is
+nearly right, and disagreement with a nearly-right price is simply being wrong.
+
+Note the profile runs the other way from intuition: the model does best with
+**240-300s** left (+7.6%), when the market itself is most uncertain and the TWAP
+has not started, and deteriorates monotonically into the close.
 
 The late actors the whale-tracker found are trading **on the settlement value
 itself** -- a faster BTC feed and, most likely, the Chainlink TWAP stream as it
@@ -311,7 +341,7 @@ accumulates. That is a different edge that this model does not have. Lifting the
 
 (Caveat on sample: the book goes one-sided near the close -- only 6% of
 final-30s seconds show fills on both sides, against ~35% mid-window -- so the
-271 trades in that bucket are thin. The mechanism and the Brier gap are the
+203 trades in that bucket are thin. The mechanism and the Brier gap are the
 load-bearing evidence, not the ROI point estimate.)
 
 ### Why this tool cannot capture the latency edge it found
@@ -319,9 +349,9 @@ load-bearing evidence, not the ROI point estimate.)
 - `orderMinSize` is **5 shares**, which at 0.50 is $2.50 -- half the entire $5
   per-window exposure cap. The simulator's one-share-at-a-time granularity is
   not executable.
-- The poll loop is REST-and-sleep. Break-even is ~10-15s of staleness, so there
-  is headroom, but the whole prize inside it is a couple of points of ROI on a
-  model that is the *worse* forecaster.
+- The poll loop is REST-and-sleep at ~3.5-4s, against a break-even of ~5s of
+  staleness. There is essentially no headroom, and the whole prize inside it is
+  ~3 points of ROI on a model that is still the *worse* forecaster.
 - No book depth is modelled; the simulator lifts the best ask at unlimited size.
 
 Capturing this properly would mean a websocket book feed, a colocated BTC feed,
@@ -330,16 +360,15 @@ competing with participants who are already doing it well.
 
 ## Known Limitations
 
-- **Strike is a proxy.** The market's strike is the Chainlink BTC/USD print at
-  the window open. `get_strike()` substitutes the Binance 1s kline close.
-  Measured over 2,010 windows these agree on direction **95.3%** of the time
-  overall but only **65.8%** when the window's total move is under $5 -- which is
-  precisely the near-the-money regime where the model claims the most edge.
+- **Strike is still a proxy.** `get_strike()` now returns a 60s TWAP of Binance
+  spot rather than a single print, which reconstructs Polymarket's settlement
+  98.3% of the time (92.7% near the money). The remaining 1.7% is real basis:
+  Chainlink aggregates several venues and we only see Binance.
 - **The settlement model is approximate.** `twap_effective_seconds()` uses
   `T_eff = (time until averaging starts) + L/3`. Once inside the averaging
   window this ignores the already-realised part of the average, which we cannot
-  observe without the Chainlink stream. It improves calibration (0.0619 ->
-  0.0417) but does not fix it, and it is why the model is hopeless in the last
+  observe without the Chainlink stream. It improves calibration (0.0524 ->
+  0.0336) but does not fix it, and it is why the model is hopeless in the last
   30 seconds.
 - **Fat tails.** See the vol section below: standardised 5-minute returns carry
   kurtosis far above 3, so Black-Scholes is the wrong distribution and the 20%
@@ -393,7 +422,7 @@ and the only thing that pays is seeing BTC before the quote moves.
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 19 tests
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 22 tests
 ```
 
 ## Research tooling

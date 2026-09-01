@@ -215,3 +215,31 @@ def test_open_exposure_is_capped_across_unsettled_windows():
     # Settling a window frees its exposure for the next one.
     sim.resolve_window(0, "up")
     assert sim.try_trade(11, "up", 0.30, 0.90, 120) is not None
+
+
+class _KlineSession:
+    """Serves a fixed 1s-kline page and records the params it was asked for."""
+
+    def __init__(self, closes):
+        self._closes = closes
+        self.params = None
+
+    def get(self, url, params=None, timeout=None):
+        self.params = params
+        return _StubResponse([[0, "0", "0", "0", str(c), "0", 0] for c in self._closes], 200)
+
+
+def test_strike_is_a_trailing_twap_not_a_single_print():
+    """The oracle averages 60s; a single print was the worst reconstruction."""
+    client = PolymarketClient()
+    client._session = _KlineSession([100.0, 102.0, 104.0, 106.0])
+    assert client.get_strike(1_000_000, lookback=60) == 103.0
+    # Averaged over the 60s BEFORE the open, never across it.
+    assert client._session.params["startTime"] == (1_000_000 - 60) * 1000
+    assert client._session.params["endTime"] == 1_000_000 * 1000 - 1
+
+
+def test_strike_returns_zero_when_binance_has_no_bars():
+    client = PolymarketClient()
+    client._session = _KlineSession([])
+    assert client.get_strike(1_000_000) == 0.0

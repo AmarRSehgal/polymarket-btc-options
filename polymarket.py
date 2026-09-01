@@ -193,28 +193,43 @@ class PolymarketClient:
             logger.error("Failed to fetch prices: %s", e)
             return None
 
-    def get_strike(self, window_ts: int) -> float:
-        """BTC price at the window open, from the Binance 1s kline close.
+    def get_strike(self, window_ts: int, lookback: float = DEFAULT_TWAP_LOOKBACK) -> float:
+        """BTC price at the window open, as a trailing TWAP of Binance 1s closes.
 
-        The market's real strike is the Chainlink BTC/USD TWAP print at the
-        window open, which has no free feed. Binance spot is the closest public
-        proxy: across the 2,010 windows in the whale-tracker capture the two
-        agree on direction 95.3% of the time overall, but only 65.8% of the time
-        when the window's total move is under $5 -- which is exactly the
-        near-the-money regime this tool trades. Treat model output in that
-        regime as carrying a large, unmodelled basis error.
+        The market's real strike is the Chainlink `btc-usd-twap-60s` print at
+        the window open, which has no free feed, so Binance spot is the proxy.
+        Which Binance statistic matters a lot. Reconstructing settlement over
+        230 settled windows and checking the implied direction against
+        Polymarket's own resolution:
+
+            open              -> close              all    near-the-money
+            point-in-time     -> point-in-time     90.9%        68.3%
+            point-in-time     -> 60s TWAP          95.2%        82.9%
+            60s TWAP          -> 60s TWAP          98.3%        92.7%
+
+        ("near-the-money" = the 41 windows whose total move was under $20.)
+        Averaging the 60 seconds before the open, to match what the oracle
+        itself averages, cuts the basis error by more than half overall and by
+        three quarters in the regime this tool actually trades. A single 1s
+        close -- what this used to return -- is the worst row in the table.
+
+        A residual basis remains: Chainlink aggregates several venues, and 1.7%
+        of windows still resolve against the best Binance-only reconstruction.
         """
         try:
             resp = self._session.get(
                 f"{BINANCE_API}/api/v3/klines",
                 params={"symbol": "BTCUSDT", "interval": "1s",
-                        "startTime": window_ts * 1000, "endTime": (window_ts + 5) * 1000,
-                        "limit": 1},
+                        "startTime": int((window_ts - lookback) * 1000),
+                        "endTime": window_ts * 1000 - 1,
+                        "limit": max(int(lookback), 1)},
                 timeout=5,
             )
             resp.raise_for_status()
             klines = resp.json()
-            return float(klines[0][4]) if klines else 0.0
+            if not klines:
+                return 0.0
+            return sum(float(k[4]) for k in klines) / len(klines)
         except Exception as e:
             logger.error("Failed to fetch strike: %s", e)
             return 0.0
