@@ -58,6 +58,7 @@ class EdgeFinder:
 
         self._window_open_price = 0.0
         self._strike_window_ts = 0
+        self._strike_is_twap = False
         self._tracked_window_ts = 0
         self._clean_strike = False
         self._start_window_ts = 0
@@ -100,8 +101,16 @@ class EdgeFinder:
                             self._strike = strike
                             self._strike_window_ts = market.window_ts
                             self._clean_strike = True
-                    if not self._strike and self._window_open_price > 0:
-                        self._strike = self._window_open_price
+                            self._strike_is_twap = True
+                        else:
+                            # Binance is unreachable. The first trade price of
+                            # the window is a point-in-time price sampled AFTER
+                            # the open -- the worst of the four reconstructions
+                            # measured in get_strike, and wrong on a third of
+                            # near-the-money windows. Show it, never trade it.
+                            self._strike_is_twap = False
+                            if self._window_open_price > 0:
+                                self._strike = self._window_open_price
 
                     prices = await asyncio.to_thread(self.poly.get_prices, market)
                     if prices:
@@ -144,6 +153,9 @@ class EdgeFinder:
 
     def _try_trades(self, market, prices):
         if not self._clean_strike or not self._price or not self._strike:
+            return
+        # Never trade a fallback strike: see the get_strike accuracy table.
+        if not self._strike_is_twap:
             return
 
         # Time and window come from the market these books belong to. Asking
@@ -208,8 +220,15 @@ class EdgeFinder:
             grid.add_row("Market", "[dim]searching...[/]")
 
         if self._strike:
-            strike_note = "" if self._clean_strike else " [dim](approx)[/]"
-            grid.add_row("Strike (K)", f"${self._strike:,.2f}{strike_note} [dim](Binance proxy for Chainlink)[/]")
+            if not self._clean_strike:
+                strike_note = " [dim](approx)[/]"
+            elif not self._strike_is_twap:
+                strike_note = " [yellow](fallback -- not trading)[/]"
+            else:
+                strike_note = ""
+            grid.add_row("Strike (K)",
+                         f"${self._strike:,.2f}{strike_note} "
+                         f"[dim](Binance 60s TWAP, proxy for Chainlink)[/]")
         if self._twap_lookback:
             grid.add_row("Settlement", f"[dim]{self._twap_lookback:.0f}s trailing TWAP (Chainlink)[/]")
         if self._fee_rate:

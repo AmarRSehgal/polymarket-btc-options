@@ -156,7 +156,14 @@ When a 5-minute window closes, positions are resolved against Polymarket's own s
 - **Stop-loss**: Max $2 realized loss per window before halting trades (configurable)
 - **No late trades**: No new positions in the last 30 seconds of a window. [This rule is load-bearing](#should-it-trade-the-last-30-seconds) -- the model loses badly there.
 - **No longshots**: Rejects trades where the model probability is below 20% (fat tails; N(d2) is least reliable in the wings)
-- **No trading on the default vol**: refuses to trade until the EWMA has warmed up, so it never trades on the hardcoded 50% placeholder
+- **No trading on the default vol**: refuses to trade until the EWMA has warmed
+  up, so it never trades on the hardcoded 50% placeholder. Ablation puts a
+  constant 45-60% vol at -3.3% to -4.9% ROI, so this rule is measured, not
+  cosmetic.
+- **No trading on a fallback strike**: if Binance klines are unreachable the
+  display falls back to the first trade price of the window, which is a
+  point-in-time price sampled *after* the open -- the worst reconstruction in
+  the table above. It is shown, marked, and never traded.
 - **Bankroll enforcement**: Cannot trade beyond available bankroll
 
 ### Simulation only, by construction
