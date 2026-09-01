@@ -150,8 +150,8 @@ When a 5-minute window closes, positions are resolved against Polymarket's own s
 - **Exposure cap**: Max $5 total outlay per 5-minute window (configurable)
 - **Portfolio cap**: Max $15 open across *all* unsettled windows. The per-window
   cap is not a portfolio cap -- a window holds its positions until Gamma reports
-  it settled, which lags the close by the better part of a minute, so two or
-  three windows are routinely open at once. A live 36-minute run held **$14.57**
+  it settled, and that lags the close by four to nine minutes, so two or three
+  windows are routinely open at once. A live 36-minute run held **$14.57**
   against a headline "$5 per market" limit.
 - **Stop-loss**: Max $2 realized loss per window before halting trades (configurable)
 - **No late trades**: No new positions in the last 30 seconds of a window. [This rule is load-bearing](#should-it-trade-the-last-30-seconds) -- the model loses badly there.
@@ -162,8 +162,9 @@ When a 5-minute window closes, positions are resolved against Polymarket's own s
   cosmetic.
 - **No trading on a fallback strike**: if Binance klines are unreachable the
   display falls back to the first trade price of the window, which is a
-  point-in-time price sampled *after* the open -- the worst reconstruction in
-  the table above. It is shown, marked, and never traded.
+  point-in-time price sampled *after* the open -- the worst row in the
+  [strike reconstruction table](#the-strike-matters-more-than-anything-in-the-model).
+  It is shown, marked, and never traded.
 - **Bankroll enforcement**: Cannot trade beyond available bankroll
 
 ### Simulation only, by construction
