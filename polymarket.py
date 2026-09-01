@@ -133,44 +133,62 @@ class PolymarketClient:
             logger.error("Failed to fetch market: %s", e)
             return None
 
-    def get_prices(self, market: Market) -> Prices | None:
-        """Best bid and ask for both tokens.
+    @staticmethod
+    def _top_of_book(book: dict) -> tuple[float, float]:
+        bid = max((float(x["price"]) for x in book.get("bids") or ()), default=0.0)
+        ask = min((float(x["price"]) for x in book.get("asks") or ()), default=0.0)
+        return bid, ask
 
-        CLOB `/price?side=BUY` returns the best bid and `side=SELL` the best
-        ask (the side of the book, not the side you are taking). Verified
-        against `/book`. These are four sequential REST calls and dominate the
-        poll's ~2.3s latency -- see the README on why that latency is the whole
-        story for this market.
+    def get_prices(self, market: Market) -> Prices | None:
+        """Best bid and ask for both tokens, as one simultaneous snapshot.
+
+        This used to issue four sequential `/price` calls (BUY and SELL per
+        token). Those return the right numbers -- `side=BUY` is the best bid and
+        `side=SELL` the best ask, verified against `/book` -- but they took
+        ~1.5-2.3s in total, so the four values came from four different instants.
+        Measured against the live book these markets move a full 1c tick inside
+        that span, which means the "bid" and "ask" being differenced were not
+        the same book, and the resulting spread was partly fictional.
+
+        `POST /books` returns both order books in a single ~1s round trip, so
+        all four numbers share one timestamp. `/price` remains the fallback.
         """
         try:
-            up_buy_r = self._session.get(
-                f"{CLOB_API}/price",
-                params={"token_id": market.up_token, "side": "BUY"},
+            resp = self._session.post(
+                f"{CLOB_API}/books",
+                json=[{"token_id": market.up_token}, {"token_id": market.down_token}],
                 timeout=5,
             )
-            up_sell_r = self._session.get(
-                f"{CLOB_API}/price",
-                params={"token_id": market.up_token, "side": "SELL"},
-                timeout=5,
-            )
-            down_buy_r = self._session.get(
-                f"{CLOB_API}/price",
-                params={"token_id": market.down_token, "side": "BUY"},
-                timeout=5,
-            )
-            down_sell_r = self._session.get(
-                f"{CLOB_API}/price",
-                params={"token_id": market.down_token, "side": "SELL"},
-                timeout=5,
-            )
+            resp.raise_for_status()
+            books = {b.get("asset_id"): b for b in resp.json()}
+            up, down = books.get(market.up_token), books.get(market.down_token)
+            if up is None or down is None:
+                raise ValueError("books response missing a token")
+
+            up_bid, up_ask = self._top_of_book(up)
+            down_bid, down_ask = self._top_of_book(down)
+            return Prices(up_bid=up_bid, up_ask=up_ask,
+                          down_bid=down_bid, down_ask=down_ask)
+
+        except Exception as e:
+            logger.warning("Batched book fetch failed (%s); falling back to /price", e)
+            return self._get_prices_fallback(market)
+
+    def _get_prices_fallback(self, market: Market) -> Prices | None:
+        """Four sequential /price calls. Not a coherent snapshot -- see above."""
+        try:
+            def px(token: str, side: str) -> float:
+                r = self._session.get(f"{CLOB_API}/price",
+                                      params={"token_id": token, "side": side},
+                                      timeout=5)
+                return float(r.json().get("price", 0))
 
             return Prices(
-                up_bid=float(up_buy_r.json().get("price", 0)),
-                up_ask=float(up_sell_r.json().get("price", 0)),
-                down_bid=float(down_buy_r.json().get("price", 0)),
-                down_ask=float(down_sell_r.json().get("price", 0)),
+                up_bid=px(market.up_token, "BUY"),
+                up_ask=px(market.up_token, "SELL"),
+                down_bid=px(market.down_token, "BUY"),
+                down_ask=px(market.down_token, "SELL"),
             )
-
         except Exception as e:
             logger.error("Failed to fetch prices: %s", e)
             return None

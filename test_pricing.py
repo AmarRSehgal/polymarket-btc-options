@@ -4,7 +4,7 @@
 """
 import math
 
-from polymarket import _fee_rate, _twap_lookback
+from polymarket import Market, PolymarketClient, _fee_rate, _twap_lookback
 from pricer import (binary_call_price, binary_put_price, taker_fee_per_share,
                     twap_effective_seconds)
 from simulator import Simulator
@@ -134,3 +134,69 @@ def test_no_trading_before_the_vol_estimator_warms_up():
     sim = Simulator()
     assert sim.try_trade(1, "up", 0.10, 0.90, 120, vol_ready=False) is None
     assert sim.try_trade(1, "up", 0.10, 0.90, 120, vol_ready=True) is not None
+
+
+def test_top_of_book_picks_the_best_level_from_unsorted_input():
+    """The CLOB returns levels in no guaranteed order; best != first."""
+    book = {"bids": [{"price": "0.21", "size": "5"}, {"price": "0.23", "size": "9"}],
+            "asks": [{"price": "0.26", "size": "5"}, {"price": "0.24", "size": "9"}]}
+    assert PolymarketClient._top_of_book(book) == (0.23, 0.24)
+    assert PolymarketClient._top_of_book({}) == (0.0, 0.0)
+
+
+class _StubSession:
+    """Minimal stand-in for requests.Session that serves one /books payload."""
+
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self._status = status
+        self.get_calls = 0
+
+    def post(self, url, json=None, timeout=None):
+        return _StubResponse(self._payload, self._status)
+
+    def get(self, url, params=None, timeout=None):
+        self.get_calls += 1
+        return _StubResponse({"price": "0.99"}, 200)
+
+
+class _StubResponse:
+    def __init__(self, payload, status):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code != 200:
+            raise RuntimeError(self.status_code)
+
+    def json(self):
+        return self._payload
+
+
+def _market():
+    return Market(slug="s", question="q", condition_id="c", up_token="UP",
+                  down_token="DOWN", window_ts=0, twap_lookback=60.0,
+                  fee_rate=0.07, min_order_size=5.0)
+
+
+def test_batched_books_maps_by_asset_id_not_response_order():
+    """Reversing the response must not swap Up and Down."""
+    payload = [
+        {"asset_id": "DOWN", "bids": [{"price": "0.76", "size": "1"}],
+         "asks": [{"price": "0.77", "size": "1"}]},
+        {"asset_id": "UP", "bids": [{"price": "0.23", "size": "1"}],
+         "asks": [{"price": "0.24", "size": "1"}]},
+    ]
+    client = PolymarketClient()
+    client._session = _StubSession(payload)
+    p = client.get_prices(_market())
+    assert (p.up_bid, p.up_ask) == (0.23, 0.24)
+    assert (p.down_bid, p.down_ask) == (0.76, 0.77)
+
+
+def test_prices_fall_back_to_the_price_endpoint_when_books_fails():
+    client = PolymarketClient()
+    client._session = _StubSession(None, status=500)
+    p = client.get_prices(_market())
+    assert p is not None and p.up_bid == 0.99
+    assert client._session.get_calls == 4

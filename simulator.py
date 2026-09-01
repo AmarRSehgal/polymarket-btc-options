@@ -94,8 +94,18 @@ class Simulator:
         cost = ask_price + fee
         if cost >= model_price:
             return None
+        # The last 30 seconds are the worst place this model can be, not the
+        # best. Backtested over 230 settled windows it wins 10% of trades there
+        # (-6.6% ROI): by then the 60s TWAP is half realised, so the market
+        # price is nearly resolved (Brier 0.034) while the model, which cannot
+        # observe the running average, is still guessing (Brier 0.222). The
+        # sophisticated late flow the sibling whale-tracker repo found is
+        # trading on the settlement value itself; taking that on with a
+        # Black-Scholes estimate is paying them.
         if time_remaining < 30:
             return None
+        # Fat tails: standardised 5-minute returns have kurtosis ~9 against 3
+        # for a normal, so N(d2) is least reliable exactly in the wings.
         if model_price < 0.20:
             return None
         if self.bankroll < cost:
