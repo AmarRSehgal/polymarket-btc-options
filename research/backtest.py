@@ -31,6 +31,7 @@ import asyncio
 import json
 import math
 import pathlib
+import random
 import statistics
 import sys
 import time
@@ -324,6 +325,44 @@ def trade_ladder(obs, min_edge, extra_cost):
     return rows
 
 
+def permutation_test(ws, sigma_at, spot, halflife, min_edge, extra_cost,
+                     lag, lag_hi, rounds, seed=11):
+    """Shuffle outcomes across windows to get a null for ROI and for the lag gradient.
+
+    Trades inside one window all settle on that window's single outcome, so the
+    effective sample size is the window count (~230), not the trade count
+    (~10,000). Treating trades as independent overstates significance by more
+    than an order of magnitude, which is how a noise-level ROI gets reported as
+    a finding.
+
+    Shuffling outcomes preserves the trade selection, the price series and the
+    window structure while destroying the link to what actually happened. Note
+    the null is NOT centred on zero: the model picks different trades at
+    different lags, so the shuffled gradient has its own bias and has to be
+    measured rather than assumed.
+    """
+    def roi(windows, lg):
+        obs = observations(windows, sigma_at, spot, halflife, lg, use_twap=True)
+        _name, _n, stake, pnl, _w = trade_ladder(obs, min_edge, extra_cost)[2]
+        return pnl / stake * 100 if stake else 0.0
+
+    real_lo, real_hi = roi(ws, lag), roi(ws, lag_hi)
+    rng = random.Random(seed)
+    rois, grads = [], []
+    for _ in range(rounds):
+        outcomes = [w["outcome"] for w in ws]
+        rng.shuffle(outcomes)
+        sh = [{**w, "outcome": o} for w, o in zip(ws, outcomes)]
+        lo, hi = roi(sh, lag), roi(sh, lag_hi)
+        rois.append(lo)
+        grads.append(lo - hi)
+    return {
+        "real_roi": real_lo, "real_grad": real_lo - real_hi,
+        "null_roi": (statistics.fmean(rois), statistics.stdev(rois)),
+        "null_grad": (statistics.fmean(grads), statistics.stdev(grads)),
+    }
+
+
 async def gather_windows(count, skip_recent):
     now = int(time.time())
     latest = now - (now % WINDOW_SECONDS) - skip_recent * WINDOW_SECONDS
@@ -361,9 +400,12 @@ def _load(path):
 @click.option("--extra-cost", default=0.0, help="Extra cents/share of slippage beyond the print")
 @click.option("--min-edge", default=0.0, help="Require at least this much edge net of costs")
 @click.option("--ewma-halflife", default=30)
+@click.option("--permute", default=0, help="Permutation rounds for a significance null (0 = skip)")
+@click.option("--permute-vs-lag", default=30, help="Lag to measure the freshness gradient against")
 @click.option("--cache", default=str(DEFAULT_CACHE), help="Where to cache the pulled data")
 @click.option("--refresh", is_flag=True, help="Re-pull even if the cache exists")
-def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, cache, refresh):
+def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, permute,
+         permute_vs_lag, cache, refresh):
     """Backtest the model against settled Polymarket windows."""
     cache_path = pathlib.Path(cache)
     if cache_path.exists() and not refresh:
@@ -430,6 +472,20 @@ def main(windows, skip_recent, lag, extra_cost, min_edge, ewma_halflife, cache, 
         wr = wins / n * 100 if n else 0.0
         print(f"{f'{lo}-{hi}s':<12} {nobs:>7} {n:>7} {stake:>10.2f} {pnl:>+9.2f} "
               f"{roi:>7.1f}% {wr:>6.1f}% {bm:>9.4f} {bk:>8.4f}")
+
+    if permute:
+        r = permutation_test(ws, sigma_at, spot, ewma_halflife, min_edge,
+                             extra_cost, lag, permute_vs_lag, permute)
+        nm, ns = r["null_roi"]
+        gm, gs = r["null_grad"]
+        print(f"\nSIGNIFICANCE ({permute} outcome permutations; n = {len(ws)} windows, "
+              f"NOT the trade count)")
+        print(f"  ROI at {lag}s{'':<10} real {r['real_roi']:+.2f}%   null {nm:+.2f}% "
+              f"+/- {ns:.2f}   -> {(r['real_roi']-nm)/ns:.1f} sd")
+        print(f"  gradient {lag}s vs {permute_vs_lag}s   real {r['real_grad']:+.2f}pp  null {gm:+.2f}pp "
+              f"+/- {gs:.2f}  -> {(r['real_grad']-gm)/gs:.1f} sd")
+        print("  the level is a point estimate on ~%d independent outcomes; the" % len(ws))
+        print("  gradient is paired across the same windows and far better powered.")
 
 
 if __name__ == "__main__":

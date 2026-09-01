@@ -2,16 +2,23 @@
 
 Live edge detection for Polymarket's BTC 5-minute Up/Down markets using Black-Scholes binary option pricing against a real-time Binance volatility estimate.
 
-> **Finding (2026-09-01): the model has no edge. What is left after costs is a
-> few seconds of feed latency, and it decays to nothing by ~15 seconds.**
-> Measured over 230 settled windows and 460,266 real fills: the market's own
-> price predicts the settlement *better* than the model does (Brier 0.155 vs
-> 0.162), and the strategy's return is a monotonic function of how fresh the
-> Binance price is relative to the market print -- +4.8% ROI reading both at the
-> same second, +1.4% with the BTC feed delayed 15s, and 0% by 30s. Black-Scholes
-> contributes nothing. See [Does the edge exist?](#does-the-edge-exist) before
-> trusting any number this tool prints. It remains a simulator and places no
-> real orders.
+> **Finding (2026-09-01): the model has no edge. Returns are a function of how
+> fresh the BTC feed is, and nothing else that can be measured here.**
+> Over 230 settled windows and 460,266 real fills:
+>
+> 1. The market's own price predicts the settlement **better than the model**
+>    (Brier 0.155 vs 0.162, and better on log-loss and calibration too). That
+>    test assumes no costs at all, so nothing downstream of it can rescue the
+>    strategy.
+> 2. Post-cost ROI is a smooth, monotonic function of BTC feed lag -- and an
+>    outcome-permutation test says the **lag gradient is real (7.2 sd) while the
+>    profit level at any single lag is not (0.9 sd)**. The honest summary is
+>    "latency pays, this model does not", not "+4.8% ROI".
+> 3. In the last 30 seconds the model wins **10%** of its trades. The
+>    no-trades-in-last-30s rule is the most protective line in the file.
+>
+> See [Does the edge exist?](#does-the-edge-exist) before trusting any number
+> this tool prints. It remains a simulator and places no real orders.
 
 ## How It Works
 
@@ -74,7 +81,7 @@ Polymarket API  ──> polymarket.py (market discovery) ───────�
 | `polymarket.py` | Market discovery via deterministic slug, batched book fetch, strike, settlement |
 | `simulator.py` | Position tracking, resolution, bankroll management |
 | `main.py` | CLI entry point with Rich live terminal display |
-| `research/backtest.py` | Backtest over settled windows using real fills. **The one that matters.** |
+| `research/backtest.py` | Backtest over settled windows using real fills, with a lag ladder and a permutation null. **The one that matters.** |
 | `research/voldiag.py` | Scale/shape diagnostics for the vol estimator |
 | `research/collect.py` | Record live books to JSONL |
 | `research/evaluate.py` | Grade a recording under a cost ladder |
@@ -214,6 +221,31 @@ earlier, while the Binance 1s close at `t` is the freshest mark obtainable.
 now takes ~0.4-0.8s and the poll loop sleeps 3s, so the live tool's decision
 cadence is ~3.5-4s -- inside break-even, but for maybe a percent or two of ROI
 before slippage, size limits, and the fact that the model is the worse predictor.
+
+### How much of this is noise?
+
+Most of the level; almost none of the gradient. Every trade inside a window
+settles on that window's single outcome, so the effective sample size is **230
+windows, not 10,570 trades** -- treating trades as independent overstates
+significance by more than an order of magnitude. `--permute` shuffles outcomes
+across windows, which preserves the trade selection and the prices while
+breaking the link to what happened:
+
+```
+SIGNIFICANCE (100 outcome permutations; n = 230 windows, NOT the trade count)
+  ROI at 0s            real +4.81%   null -0.38% +/- 5.49   -> 0.9 sd
+  gradient 0s vs 30s   real +4.44pp  null -15.14pp +/- 2.71 -> 7.2 sd
+```
+
+So **the +4.8% is not distinguishable from noise** (split-half confirms it:
++1.2% on the first 115 windows, +9.5% on the second). What *is* solid is the
+freshness gradient, which is paired across the same windows and lands 7.2 sd
+from its null. Note the null is not centred on zero -- the model selects
+different trades at different lags, so the bias has to be measured rather than
+assumed, which is the whole reason for the permutation rather than a t-test.
+
+Read that as the finding: **latency pays; this model does not.** Reproduce with
+`python3 research/backtest.py --permute 100`.
 
 ### Is it the spread or the fee?
 
@@ -357,6 +389,7 @@ env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 19 tes
 python3 research/backtest.py --windows 300
 python3 research/backtest.py --lag 15        # degrade the BTC feed
 python3 research/backtest.py --lag -30       # placebo: BTC from the future
+python3 research/backtest.py --permute 100   # significance vs an outcome-shuffle null
 
 # Vol estimator scale and shape diagnostics
 python3 research/voldiag.py --days 14
