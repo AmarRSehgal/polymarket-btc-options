@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 
 import requests
@@ -16,47 +15,64 @@ logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
+BINANCE_API = "https://api.binance.com"
 
 WINDOW_SECONDS = 300
+
+# Fallbacks used only if Gamma stops reporting the market's own config.
+DEFAULT_TWAP_LOOKBACK = 60.0
+DEFAULT_FEE_RATE = 0.07
 
 
 class Market:
     __slots__ = (
         "slug", "question", "condition_id", "up_token", "down_token",
-        "window_ts", "opening_price",
+        "window_ts", "twap_lookback", "fee_rate", "min_order_size",
     )
 
     def __init__(self, slug: str, question: str, condition_id: str,
                  up_token: str, down_token: str, window_ts: int,
-                 opening_price: float):
+                 twap_lookback: float, fee_rate: float, min_order_size: float):
         self.slug = slug
         self.question = question
         self.condition_id = condition_id
         self.up_token = up_token
         self.down_token = down_token
         self.window_ts = window_ts
-        self.opening_price = opening_price
+        self.twap_lookback = twap_lookback
+        self.fee_rate = fee_rate
+        self.min_order_size = min_order_size
 
 
 class Prices:
-    __slots__ = ("up_mid", "down_mid", "up_bid", "up_ask", "down_bid", "down_ask")
+    __slots__ = ("up_bid", "up_ask", "down_bid", "down_ask")
 
-    def __init__(self, up_mid: float, down_mid: float,
-                 up_bid: float, up_ask: float,
+    def __init__(self, up_bid: float, up_ask: float,
                  down_bid: float, down_ask: float):
-        self.up_mid = up_mid
-        self.down_mid = down_mid
         self.up_bid = up_bid
         self.up_ask = up_ask
         self.down_bid = down_bid
         self.down_ask = down_ask
 
 
-def _parse_opening_price(question: str) -> float:
-    match = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", question)
-    if match:
-        return float(match.group(1).replace(",", ""))
-    return 0.0
+def _twap_lookback(market: dict) -> float:
+    """Seconds of trailing TWAP the market settles on, 0 if point-in-time.
+
+    Polymarket moved these markets onto Chainlink's 60s-TWAP stream: the Gamma
+    payload carries cryptoMarketConfig {"id": "btc-5m-twap-60", "twapEnabled":
+    true, "twapLookbackSeconds": 60}. Older markets have no config at all.
+    """
+    cfg = market.get("cryptoMarketConfig") or {}
+    if not cfg.get("twapEnabled"):
+        return 0.0
+    return float(cfg.get("twapLookbackSeconds", DEFAULT_TWAP_LOOKBACK))
+
+
+def _fee_rate(market: dict) -> float:
+    """Taker fee rate from the market's own feeSchedule, 0 if fees are off."""
+    if not market.get("feesEnabled"):
+        return 0.0
+    return float((market.get("feeSchedule") or {}).get("rate", DEFAULT_FEE_RATE))
 
 
 class PolymarketClient:
@@ -97,17 +113,17 @@ class PolymarketClient:
 
             m = events[0]["markets"][0]
             token_ids = json.loads(m["clobTokenIds"])
-            question = m.get("question", "")
-            opening_price = _parse_opening_price(question)
 
             market = Market(
                 slug=slug,
-                question=question,
+                question=m.get("question", ""),
                 condition_id=m.get("conditionId", ""),
                 up_token=token_ids[0],
                 down_token=token_ids[1],
                 window_ts=window_ts,
-                opening_price=opening_price,
+                twap_lookback=_twap_lookback(m),
+                fee_rate=_fee_rate(m),
+                min_order_size=float(m.get("orderMinSize", 0) or 0),
             )
             self._cached_market = market
             self._cached_window_ts = window_ts
@@ -118,17 +134,15 @@ class PolymarketClient:
             return None
 
     def get_prices(self, market: Market) -> Prices | None:
+        """Best bid and ask for both tokens.
+
+        CLOB `/price?side=BUY` returns the best bid and `side=SELL` the best
+        ask (the side of the book, not the side you are taking). Verified
+        against `/book`. These are four sequential REST calls and dominate the
+        poll's ~2.3s latency -- see the README on why that latency is the whole
+        story for this market.
+        """
         try:
-            up_mid_r = self._session.get(
-                f"{CLOB_API}/midpoint",
-                params={"token_id": market.up_token},
-                timeout=5,
-            )
-            down_mid_r = self._session.get(
-                f"{CLOB_API}/midpoint",
-                params={"token_id": market.down_token},
-                timeout=5,
-            )
             up_buy_r = self._session.get(
                 f"{CLOB_API}/price",
                 params={"token_id": market.up_token, "side": "BUY"},
@@ -151,8 +165,6 @@ class PolymarketClient:
             )
 
             return Prices(
-                up_mid=float(up_mid_r.json().get("mid", 0)),
-                down_mid=float(down_mid_r.json().get("mid", 0)),
                 up_bid=float(up_buy_r.json().get("price", 0)),
                 up_ask=float(up_sell_r.json().get("price", 0)),
                 down_bid=float(down_buy_r.json().get("price", 0)),
@@ -161,4 +173,55 @@ class PolymarketClient:
 
         except Exception as e:
             logger.error("Failed to fetch prices: %s", e)
+            return None
+
+    def get_strike(self, window_ts: int) -> float:
+        """BTC price at the window open, from the Binance 1s kline close.
+
+        The market's real strike is the Chainlink BTC/USD TWAP print at the
+        window open, which has no free feed. Binance spot is the closest public
+        proxy: across the 2,010 windows in the whale-tracker capture the two
+        agree on direction 95.3% of the time overall, but only 65.8% of the time
+        when the window's total move is under $5 -- which is exactly the
+        near-the-money regime this tool trades. Treat model output in that
+        regime as carrying a large, unmodelled basis error.
+        """
+        try:
+            resp = self._session.get(
+                f"{BINANCE_API}/api/v3/klines",
+                params={"symbol": "BTCUSDT", "interval": "1s",
+                        "startTime": window_ts * 1000, "endTime": (window_ts + 5) * 1000,
+                        "limit": 1},
+                timeout=5,
+            )
+            resp.raise_for_status()
+            klines = resp.json()
+            return float(klines[0][4]) if klines else 0.0
+        except Exception as e:
+            logger.error("Failed to fetch strike: %s", e)
+            return 0.0
+
+    def get_settled_outcome(self, window_ts: int) -> str | None:
+        """'up'/'down' once Polymarket has resolved the window, else None.
+
+        Grading against Binance close-vs-open instead of this is wrong on ~1 in
+        20 windows overall and ~1 in 3 of the near-the-money ones.
+        """
+        try:
+            resp = self._session.get(
+                f"{GAMMA_API}/events", params={"slug": f"btc-updown-5m-{window_ts}"}, timeout=5
+            )
+            resp.raise_for_status()
+            events = resp.json()
+            if not events or not events[0].get("markets"):
+                return None
+            m = events[0]["markets"][0]
+            if not m.get("closed"):
+                return None
+            names = json.loads(m.get("outcomes", "[]"))
+            prices = json.loads(m.get("outcomePrices", "[]"))
+            winners = [n for n, p in zip(names, prices) if float(p) > 0.95]
+            return winners[0].lower() if len(winners) == 1 else None
+        except Exception as e:
+            logger.error("Failed to fetch outcome: %s", e)
             return None

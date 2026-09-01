@@ -1,4 +1,4 @@
-"""Lightweight Binance BTCUSDT futures trade stream.
+"""Lightweight Binance BTCUSDT spot trade stream (futures optional).
 
 Connects to the aggTrade websocket and dispatches Trade objects to callbacks.
 Reconnects automatically on disconnect.

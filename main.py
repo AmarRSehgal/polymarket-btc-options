@@ -22,7 +22,7 @@ from rich.table import Table
 
 from feed import BinanceFeed
 from polymarket import PolymarketClient
-from pricer import binary_call_price, edge_cents
+from pricer import binary_call_price, edge_cents, taker_fee_per_share, twap_effective_seconds
 from simulator import Simulator
 from vol import VolEstimator
 
@@ -49,7 +49,6 @@ class EdgeFinder:
         )
 
         self._price = 0.0
-        self._prev_price = 0.0
         self._trade_count = 0
 
         self._market = None
@@ -57,27 +56,25 @@ class EdgeFinder:
         self._strike = 0.0
 
         self._window_open_price = 0.0
+        self._strike_window_ts = 0
         self._tracked_window_ts = 0
         self._clean_strike = False
         self._start_window_ts = 0
 
         self._last_trade_entry = ""
+        self._pending_resolution: list[int] = []
+        self._twap_lookback = 0.0
+        self._fee_rate = 0.0
 
         self.feed.on_trade(self._on_trade)
 
     def _on_trade(self, trade):
-        self._prev_price = self._price
-
         window_ts = self.poly.current_window_ts()
         if window_ts != self._tracked_window_ts:
             if self._start_window_ts == 0:
                 self._start_window_ts = window_ts
-            else:
-                old_close = self._prev_price if self._prev_price else trade.price
-                old_strike = self._window_open_price
-                if old_strike > 0 and old_close > 0:
-                    outcome = "up" if old_close >= old_strike else "down"
-                    self.sim.resolve_window(self._tracked_window_ts, outcome)
+            elif self._tracked_window_ts:
+                self._pending_resolution.append(self._tracked_window_ts)
 
             self._window_open_price = trade.price
             self._tracked_window_ts = window_ts
@@ -90,13 +87,20 @@ class EdgeFinder:
     async def _poll_polymarket(self):
         while True:
             try:
+                await self._settle_pending()
                 market = await asyncio.to_thread(self.poly.get_market)
                 if market:
                     self._market = market
-                    if market.opening_price > 0:
-                        self._strike = market.opening_price
-                        self._clean_strike = True
-                    elif self._window_open_price > 0:
+                    self._twap_lookback = market.twap_lookback
+                    self._fee_rate = market.fee_rate
+
+                    if self._strike_window_ts != market.window_ts:
+                        strike = await asyncio.to_thread(self.poly.get_strike, market.window_ts)
+                        if strike > 0:
+                            self._strike = strike
+                            self._strike_window_ts = market.window_ts
+                            self._clean_strike = True
+                    if not self._strike and self._window_open_price > 0:
                         self._strike = self._window_open_price
 
                     prices = await asyncio.to_thread(self.poly.get_prices, market)
@@ -107,6 +111,22 @@ class EdgeFinder:
                 logger.error("Polymarket poll error: %s", e)
             await asyncio.sleep(3)
 
+    async def _settle_pending(self):
+        """Resolve closed windows against Polymarket's own settlement."""
+        still_open = []
+        for wts in self._pending_resolution:
+            outcome = await asyncio.to_thread(self.poly.get_settled_outcome, wts)
+            if outcome is None:
+                still_open.append(wts)
+            else:
+                self.sim.resolve_window(wts, outcome)
+        self._pending_resolution = still_open
+
+    def _model_up(self, remaining: float) -> float:
+        """P(Up) accounting for the trailing-TWAP settlement."""
+        t_eff = twap_effective_seconds(remaining, self._twap_lookback)
+        return binary_call_price(self._price, self._strike, t_eff, self.vol.annual_vol)
+
     def _try_trades(self, prices):
         if not self._clean_strike or not self._price or not self._strike:
             return
@@ -115,17 +135,20 @@ class EdgeFinder:
         if remaining <= 0:
             return
 
-        model_up = binary_call_price(self._price, self._strike, remaining, self.vol.annual_vol)
+        model_up = self._model_up(remaining)
         model_down = 1.0 - model_up
         window_ts = self.poly.current_window_ts()
 
-        pos = self.sim.try_trade(window_ts, "up", prices.up_ask, model_up, remaining)
+        vol_ready = self.vol.bar_count >= self.vol.ewma_halflife
+        pos = self.sim.try_trade(window_ts, "up", prices.up_ask, model_up, remaining,
+                                 self._fee_rate, vol_ready)
         if pos:
             self._last_trade_entry = (
                 f"BUY UP @ {pos.entry:.2f} (model={pos.model_price:.3f}, edge={pos.edge*100:.1f}c)"
             )
 
-        pos = self.sim.try_trade(window_ts, "down", prices.down_ask, model_down, remaining)
+        pos = self.sim.try_trade(window_ts, "down", prices.down_ask, model_down, remaining,
+                                 self._fee_rate, vol_ready)
         if pos:
             self._last_trade_entry = (
                 f"BUY DOWN @ {pos.entry:.2f} (model={pos.model_price:.3f}, edge={pos.edge*100:.1f}c)"
@@ -144,8 +167,9 @@ class EdgeFinder:
         grid.add_row("Trades", f"{self._trade_count:,}")
 
         vol_label = f"{self.vol.annual_vol * 100:.1f}%"
-        if self.vol.bar_count < 30:
-            vol_label += f" [dim](warming: {self.vol.bar_count}/30 bars)[/]"
+        if self.vol.bar_count < self.vol.ewma_halflife:
+            vol_label += (f" [yellow](warming {self.vol.bar_count}/{self.vol.ewma_halflife}"
+                          f" bars -- not trading)[/]")
         grid.add_row("Vol (ann.)", vol_label)
 
         if self._price:
@@ -167,7 +191,11 @@ class EdgeFinder:
 
         if self._strike:
             strike_note = "" if self._clean_strike else " [dim](approx)[/]"
-            grid.add_row("Strike (K)", f"${self._strike:,.2f}{strike_note}")
+            grid.add_row("Strike (K)", f"${self._strike:,.2f}{strike_note} [dim](Binance proxy for Chainlink)[/]")
+        if self._twap_lookback:
+            grid.add_row("Settlement", f"[dim]{self._twap_lookback:.0f}s trailing TWAP (Chainlink)[/]")
+        if self._fee_rate:
+            grid.add_row("Taker fee", f"[dim]rate {self._fee_rate} -> up to {self._fee_rate*25:.2f}c/share[/]")
 
         if self._prices:
             grid.add_row("Up bid/ask", f"{self._prices.up_bid:.2f} / {self._prices.up_ask:.2f}")
@@ -179,8 +207,7 @@ class EdgeFinder:
         if not self._clean_strike:
             grid.add_row("[bold green]MODEL[/]", "[dim]waiting for clean window boundary...[/]")
         elif self._price and self._strike and remaining > 0:
-            sigma = self.vol.annual_vol
-            model_up = binary_call_price(self._price, self._strike, remaining, sigma)
+            model_up = self._model_up(remaining)
             model_down = 1.0 - model_up
 
             move_pct = (self._price - self._strike) / self._strike * 100
@@ -189,8 +216,10 @@ class EdgeFinder:
             grid.add_row("P(Down)", f"{model_down:.4f}  ({model_down * 100:.1f}%)")
 
             if self._prices:
-                up_e = edge_cents(model_up, self._prices.up_mid)
-                down_e = edge_cents(model_down, self._prices.down_mid)
+                up_cost = self._prices.up_ask + taker_fee_per_share(self._prices.up_ask, self._fee_rate)
+                down_cost = self._prices.down_ask + taker_fee_per_share(self._prices.down_ask, self._fee_rate)
+                up_e = edge_cents(model_up, up_cost)
+                down_e = edge_cents(model_down, down_cost)
 
                 def _style(e):
                     if e > 2:
@@ -199,8 +228,8 @@ class EdgeFinder:
                         return "bold red"
                     return "white"
 
-                grid.add_row("Up edge", f"[{_style(up_e)}]{up_e:+.1f}c[/]")
-                grid.add_row("Down edge", f"[{_style(down_e)}]{down_e:+.1f}c[/]")
+                grid.add_row("Up edge (net of fee)", f"[{_style(up_e)}]{up_e:+.1f}c[/]")
+                grid.add_row("Down edge (net of fee)", f"[{_style(down_e)}]{down_e:+.1f}c[/]")
         else:
             grid.add_row("[bold green]MODEL[/]", "[dim]waiting for data...[/]")
 
@@ -223,7 +252,7 @@ class EdgeFinder:
             grid.add_row("Resolved trades", str(sim.trade_count))
             grid.add_row("Win rate", f"{sim.win_count}/{sim.trade_count} ({sim.win_rate*100:.0f}%)")
             grid.add_row("Total P&L", f"[{pnl_style}]${sim.total_pnl:+.2f}[/]")
-            grid.add_row("Total risked", f"${sim.total_risked:.2f}")
+            grid.add_row("Total risked", f"${sim.total_risked:.2f}  [dim](fees ${sim.total_fees:.2f})[/]")
             if sim.total_risked > 0:
                 roi = sim.total_pnl / sim.total_risked * 100
                 grid.add_row("ROI", f"[{pnl_style}]{roi:+.1f}%[/]")
@@ -260,7 +289,7 @@ class EdgeFinder:
             stop.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_event_loop().add_signal_handler(sig, on_signal)
+            asyncio.get_running_loop().add_signal_handler(sig, on_signal)
 
         with Live(self._build_display(), console=console, refresh_per_second=2) as live:
             while not stop.is_set():

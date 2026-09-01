@@ -12,15 +12,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pricer import taker_fee_per_share
+
 
 @dataclass
 class Position:
     window_ts: int
     side: str
     entry: float
+    fee: float
     model_price: float
     edge: float
     time_remaining: float
+
+    @property
+    def cost(self) -> float:
+        return self.entry + self.fee
 
 
 @dataclass
@@ -28,6 +35,7 @@ class ResolvedTrade:
     window_ts: int
     side: str
     entry: float
+    fee: float
     model_price: float
     edge: float
     outcome: str
@@ -65,20 +73,36 @@ class Simulator:
         ask_price: float,
         model_price: float,
         time_remaining: float,
+        fee_rate: float = 0.0,
+        vol_ready: bool = True,
     ) -> Position | None:
+        """Buy one share at the ask if it clears fair value net of the taker fee.
+
+        Edge is measured against ask + fee, not against the midpoint. The
+        midpoint is not a price anyone can trade at, and at a 1c tick the half
+        spread plus the ~1.75c/share peak fee is larger than most of the
+        "edge" a 5-minute vol model will ever claim to find.
+        """
         if ask_price <= 0 or model_price <= 0:
             return None
-        if ask_price >= model_price:
+        # Before the EWMA has enough bars, annual_vol is a hardcoded 50% guess.
+        # Trading on it is trading on a constant, not on a measurement.
+        if not vol_ready:
+            return None
+
+        fee = taker_fee_per_share(ask_price, fee_rate) if fee_rate else 0.0
+        cost = ask_price + fee
+        if cost >= model_price:
             return None
         if time_remaining < 30:
             return None
         if model_price < 0.20:
             return None
-        if self.bankroll < ask_price:
+        if self.bankroll < cost:
             return None
 
         exposure = self._window_exposure.get(window_ts, 0.0)
-        if exposure + ask_price > self.max_exposure_per_market:
+        if exposure + cost > self.max_exposure_per_market:
             return None
 
         if self._window_loss.get(window_ts, 0.0) >= self.max_loss_per_window:
@@ -88,13 +112,14 @@ class Simulator:
             window_ts=window_ts,
             side=side,
             entry=ask_price,
+            fee=fee,
             model_price=model_price,
-            edge=model_price - ask_price,
+            edge=model_price - cost,
             time_remaining=time_remaining,
         )
         self.open.append(pos)
-        self.bankroll -= ask_price
-        self._window_exposure[window_ts] = exposure + ask_price
+        self.bankroll -= cost
+        self._window_exposure[window_ts] = exposure + cost
         return pos
 
     def resolve_window(self, window_ts: int, outcome: str):
@@ -105,7 +130,7 @@ class Simulator:
                 continue
 
             payout = 1.0 if pos.side == outcome else 0.0
-            pnl = payout - pos.entry
+            pnl = payout - pos.cost
             self.bankroll += payout
 
             if pnl < 0:
@@ -117,6 +142,7 @@ class Simulator:
                 window_ts=pos.window_ts,
                 side=pos.side,
                 entry=pos.entry,
+                fee=pos.fee,
                 model_price=pos.model_price,
                 edge=pos.edge,
                 outcome=outcome,
@@ -133,7 +159,11 @@ class Simulator:
 
     @property
     def total_risked(self) -> float:
-        return sum(t.entry for t in self.resolved)
+        return sum(t.entry + t.fee for t in self.resolved)
+
+    @property
+    def total_fees(self) -> float:
+        return sum(t.fee for t in self.resolved)
 
     @property
     def trade_count(self) -> int:
@@ -155,7 +185,7 @@ class Simulator:
 
     @property
     def open_exposure(self) -> float:
-        return sum(p.entry for p in self.open)
+        return sum(p.cost for p in self.open)
 
     @property
     def windows_traded(self) -> int:
@@ -165,15 +195,6 @@ class Simulator:
         for p in self.open:
             seen.add(p.window_ts)
         return len(seen)
-
-    @property
-    def peak_bankroll(self) -> float:
-        bal = self.initial_bankroll
-        peak = bal
-        for t in self.resolved:
-            bal += t.pnl
-            peak = max(peak, bal)
-        return peak
 
     @property
     def max_drawdown(self) -> float:
