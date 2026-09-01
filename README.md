@@ -124,11 +124,26 @@ python main.py --bar-interval 30 --ewma-halflife 15  # more responsive vol
 The simulator polls Polymarket every 3 seconds. On each poll:
 
 1. Fetches both order books in a single batched `POST /books` call, so the Up and Down quotes share one timestamp
-2. Computes model fair value for Up and Down using current BTC price, strike, time remaining, and EWMA vol
+2. Computes model fair value for Up and Down using current BTC price, a 60-second TWAP strike, time remaining, and EWMA vol
 3. If the market ask for either side is below the model's fair value **net of the taker fee**, buys a contract at the ask
 4. Continues buying each poll until the per-window exposure cap ($5) or stop-loss ($2) is hit
 
 When a 5-minute window closes, positions are resolved against Polymarket's own settlement.
+
+### Two things that surprise you on a first run
+
+- **It will not trade for the first ~30 minutes.** The simulator refuses to
+  trade while the EWMA is still the hardcoded 50% placeholder, and the default
+  `--ewma-halflife 30` over 60-second bars means 30 bars, so a 15-minute run
+  displays a live model and never places a single simulated trade. That is
+  correct behaviour, not a hang. `--bar-interval 15 --ewma-halflife 10` warms
+  in ~2.5 minutes if you just want to watch it work.
+- **Settlement lags the close by four to nine minutes.** Gamma does not flag a
+  window `closed` when it ends -- measured 2026-09-01, a window 213s past its
+  close was still open while one 513s past was resolved. So one to two windows'
+  worth of positions are always outstanding, which is why the portfolio cap
+  below exists and why `Open positions` routinely shows more than the
+  per-window limit.
 
 ### Risk Controls
 
