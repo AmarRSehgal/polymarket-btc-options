@@ -253,3 +253,13 @@ def test_settlement_is_not_polled_before_gamma_could_have_resolved():
     long_closed = int(now) - 300 - 600    # closed ten minutes ago
     assert PolymarketClient.can_be_settled(just_closed) is False
     assert PolymarketClient.can_be_settled(long_closed) is True
+
+
+def test_an_empty_book_side_is_not_a_free_contract():
+    """Near expiry nobody offers the losing side; that must not read as 0.00."""
+    empty = {"bids": [{"price": "0.99", "size": "5"}], "asks": []}
+    bid, ask = PolymarketClient._top_of_book(empty)
+    assert (bid, ask) == (0.99, 0.0)
+    # The simulator already refuses it; the display must too (see _build_display).
+    sim = Simulator()
+    assert sim.try_trade(1, "down", ask, 0.996, 120) is None

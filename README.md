@@ -89,7 +89,7 @@ Polymarket API  ──> polymarket.py (market discovery) ───────�
 | `research/voldiag.py` | Scale/shape diagnostics for the vol estimator |
 | `research/collect.py` | Record live books to JSONL |
 | `research/evaluate.py` | Grade a recording under a cost ladder |
-| `test_pricing.py` | Unit tests (22) |
+| `test_pricing.py` | Unit tests (24) |
 
 ## Usage
 
@@ -487,7 +487,7 @@ and the only thing that actually pays is seeing BTC before the quote moves.
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 22 tests
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 24 tests
 ```
 
 ## Research tooling

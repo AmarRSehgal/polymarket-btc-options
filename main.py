@@ -235,8 +235,15 @@ class EdgeFinder:
             grid.add_row("Taker fee", f"[dim]rate {self._fee_rate} -> up to {self._fee_rate*25:.2f}c/share[/]")
 
         if self._prices:
-            grid.add_row("Up bid/ask", f"{self._prices.up_bid:.2f} / {self._prices.up_ask:.2f}")
-            grid.add_row("Down bid/ask", f"{self._prices.down_bid:.2f} / {self._prices.down_ask:.2f}")
+            # A side of the book can be genuinely empty near expiry -- nobody
+            # offers the losing outcome. _top_of_book reports that as 0.0, which
+            # must not be rendered as a real 0.00 quote.
+            def _q(px: float) -> str:
+                return f"{px:.2f}" if px > 0 else "[dim]--[/]"
+            grid.add_row("Up bid/ask",
+                         f"{_q(self._prices.up_bid)} / {_q(self._prices.up_ask)}")
+            grid.add_row("Down bid/ask",
+                         f"{_q(self._prices.down_bid)} / {_q(self._prices.down_ask)}")
 
         # -- Model --
         grid.add_row("", "")
@@ -253,11 +260,6 @@ class EdgeFinder:
             grid.add_row("P(Down)", f"{model_down:.4f}  ({model_down * 100:.1f}%)")
 
             if self._prices:
-                up_cost = self._prices.up_ask + taker_fee_per_share(self._prices.up_ask, self._fee_rate)
-                down_cost = self._prices.down_ask + taker_fee_per_share(self._prices.down_ask, self._fee_rate)
-                up_e = edge_cents(model_up, up_cost)
-                down_e = edge_cents(model_down, down_cost)
-
                 def _style(e):
                     if e > 2:
                         return "bold green"
@@ -265,8 +267,17 @@ class EdgeFinder:
                         return "bold red"
                     return "white"
 
-                grid.add_row("Up edge (net of fee)", f"[{_style(up_e)}]{up_e:+.1f}c[/]")
-                grid.add_row("Down edge (net of fee)", f"[{_style(down_e)}]{down_e:+.1f}c[/]")
+                # An absent ask is not a free contract. Quoting an edge against
+                # a 0.00 placeholder printed a phantom +99.6c on a live run.
+                for label, model, ask in (
+                    ("Up edge (net of fee)", model_up, self._prices.up_ask),
+                    ("Down edge (net of fee)", model_down, self._prices.down_ask),
+                ):
+                    if ask <= 0:
+                        grid.add_row(label, "[dim]no offer[/]")
+                        continue
+                    e = edge_cents(model, ask + taker_fee_per_share(ask, self._fee_rate))
+                    grid.add_row(label, f"[{_style(e)}]{e:+.1f}c[/]")
         else:
             grid.add_row("[bold green]MODEL[/]", "[dim]waiting for data...[/]")
 
