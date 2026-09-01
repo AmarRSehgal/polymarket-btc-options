@@ -519,6 +519,19 @@ is not. The validator also refuses a negative-lag row that is not flagged
 `placebo` -- unflagged, future-BTC lookahead would render as the best number on
 the page.
 
+### On the cross-source board
+
+This feed is registered in `~/personal/opportunities/sources.py` as
+`polymarket_btc`, and renders as a **section with status `empty`** -- the
+board's own "scan ran and found nothing that cleared the bar", which is the
+literally correct description of a scanner whose measured edge is noise. Its
+caveat carries the live scorecard, so the board states why it is empty rather
+than just showing nothing.
+
+The normalizer is gated on the payload's own `model_beats_market`, not on a
+hardcoded empty list. So on the day the model actually starts out-forecasting
+the market, the section begins reporting by itself with no code change.
+
 The job does **not** git-push the site. It writes into this repo and, if
 `POLYMARKET_WEB_DEST` is set, mirrors the payload into a website checkout;
 committing stays a human step. Mechanism and gotchas:
