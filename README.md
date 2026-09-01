@@ -130,7 +130,7 @@ The simulator polls Polymarket every 3 seconds. On each poll:
 
 When a 5-minute window closes, positions are resolved against Polymarket's own settlement.
 
-### Two things that surprise you on a first run
+### Three things that surprise you on a first run
 
 - **It will not trade for the first ~30 minutes.** The simulator refuses to
   trade while the EWMA is still the hardcoded 50% placeholder, and the default
@@ -144,6 +144,10 @@ When a 5-minute window closes, positions are resolved against Polymarket's own s
   worth of positions are always outstanding, which is why the portfolio cap
   below exists and why `Open positions` routinely shows more than the
   per-window limit.
+- **Ctrl-C takes a few seconds.** REST calls run on worker threads via
+  `asyncio.to_thread`, and cancelling the task does not interrupt a request
+  already in flight, so shutdown waits out the 5s HTTP timeout in the worst
+  case. It is exiting, not hung.
 
 ### Risk Controls
 
