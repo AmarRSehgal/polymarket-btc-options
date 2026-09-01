@@ -259,7 +259,9 @@ class EdgeFinder:
             f"${sim.window_exposure(wts):.2f} / ${sim.max_exposure_per_market:.2f} exposure"
             f"  |  loss: ${sim.window_loss(wts):.2f} / ${sim.max_loss_per_window:.2f} stop",
         )
-        grid.add_row("Open positions", f"{sim.open_count}  (${sim.open_exposure:.2f} at risk)")
+        grid.add_row("Open positions",
+                     f"{sim.open_count}  (${sim.open_exposure:.2f} / "
+                     f"${sim.max_open_exposure:.2f} open across unsettled windows)")
 
         if sim.trade_count > 0:
             pnl_style = "bold green" if sim.total_pnl >= 0 else "bold red"

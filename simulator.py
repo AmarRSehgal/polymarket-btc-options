@@ -6,6 +6,7 @@ fair value, resolves at window close, and reports cumulative P&L.
 Risk controls:
 - $100 starting bankroll
 - Max $5 exposure per market (window)
+- Max $15 open across ALL unsettled windows
 - Max $2 loss per window (stop-loss)
 """
 from __future__ import annotations
@@ -49,11 +50,19 @@ class Simulator:
         bankroll: float = 100.0,
         max_exposure_per_market: float = 5.0,
         max_loss_per_window: float = 2.0,
+        max_open_exposure: float | None = None,
     ):
         self.bankroll = bankroll
         self.initial_bankroll = bankroll
         self.max_exposure_per_market = max_exposure_per_market
         self.max_loss_per_window = max_loss_per_window
+        # The per-window cap is not a portfolio cap. A window keeps its
+        # positions until Gamma reports it settled, which lags the close by
+        # the better part of a minute, so two or three windows are routinely
+        # open at once -- a live 36-minute run held $14.57 against a "$5 per
+        # market" limit. Bound the total explicitly.
+        self.max_open_exposure = (3.0 * max_exposure_per_market
+                                  if max_open_exposure is None else max_open_exposure)
 
         self.open: list[Position] = []
         self.resolved: list[ResolvedTrade] = []
@@ -113,6 +122,9 @@ class Simulator:
 
         exposure = self._window_exposure.get(window_ts, 0.0)
         if exposure + cost > self.max_exposure_per_market:
+            return None
+
+        if self.open_exposure + cost > self.max_open_exposure:
             return None
 
         if self._window_loss.get(window_ts, 0.0) >= self.max_loss_per_window:

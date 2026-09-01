@@ -129,11 +129,26 @@ When a 5-minute window closes, positions are resolved against Polymarket's own s
 ### Risk Controls
 
 - **Exposure cap**: Max $5 total outlay per 5-minute window (configurable)
+- **Portfolio cap**: Max $15 open across *all* unsettled windows. The per-window
+  cap is not a portfolio cap -- a window holds its positions until Gamma reports
+  it settled, which lags the close by the better part of a minute, so two or
+  three windows are routinely open at once. A live 36-minute run held **$14.57**
+  against a headline "$5 per market" limit.
 - **Stop-loss**: Max $2 realized loss per window before halting trades (configurable)
 - **No late trades**: No new positions in the last 30 seconds of a window. [This rule is load-bearing](#should-it-trade-the-last-30-seconds) -- the model loses badly there.
 - **No longshots**: Rejects trades where the model probability is below 20% (fat tails; N(d2) is least reliable in the wings)
 - **No trading on the default vol**: refuses to trade until the EWMA has warmed up, so it never trades on the hardcoded 50% placeholder
 - **Bankroll enforcement**: Cannot trade beyond available bankroll
+
+### Simulation only, by construction
+
+There is no order placement path in this repo and no way to add one by
+accident. Placing a Polymarket order requires an EIP-712 signature from a
+funded wallet plus L2 API credentials; the repo contains no private key, no
+signing code, no wallet library and no credential handling of any kind. Every
+outbound call is a public read -- the single `POST` in the codebase is
+`CLOB /books`, which is a batched book *query*. `simulator.py` moves a number
+in memory and nothing else.
 
 ## Data Sources
 

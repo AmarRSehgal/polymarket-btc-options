@@ -200,3 +200,18 @@ def test_prices_fall_back_to_the_price_endpoint_when_books_fails():
     p = client.get_prices(_market())
     assert p is not None and p.up_bid == 0.99
     assert client._session.get_calls == 4
+
+
+def test_open_exposure_is_capped_across_unsettled_windows():
+    """The per-window cap is not a portfolio cap; unsettled windows accumulate."""
+    sim = Simulator(max_exposure_per_market=5.0)
+    for window in range(10):
+        for _ in range(30):
+            sim.try_trade(window, "up", 0.30, 0.90, 120)
+    # Nothing has resolved, so every position is still open.
+    assert sim.open_exposure <= sim.max_open_exposure == 15.0
+    assert sim.windows_traded < 10
+
+    # Settling a window frees its exposure for the next one.
+    sim.resolve_window(0, "up")
+    assert sim.try_trade(11, "up", 0.30, 0.90, 120) is not None
