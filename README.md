@@ -403,6 +403,15 @@ competing with participants who are already doing it well.
 - **Backtest fill realism.** The reconstruction takes the most aggressive quote
   implied by the fills in each second. Where several fills land in one second at
   different prices, that is optimistic by up to a tick.
+- **One sample, one regime.** The backtest covers 230 settled windows -- about
+  19 contiguous hours, at a realised vol of ~31% annualised. Nothing here says
+  how any of it behaves in a different vol regime, and the permutation test
+  bounds sampling noise within this sample only, not regime risk. Re-pull with
+  `--refresh` before trusting a number that is more than a day old.
+- **No live forward test.** Every result is a backtest or a short observational
+  run. The tool has never been left running long enough, on the shipped
+  settings, to produce a statistically meaningful live track record -- and at
+  30 bars of warm-up plus a 4-9 minute settlement lag, that would take days.
 
 ## Volatility Estimator
 
