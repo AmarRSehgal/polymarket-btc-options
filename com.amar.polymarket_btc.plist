@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.amar.polymarket_btc</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/amar/personal/polymarket-btc-options/run_daily.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/amar/personal/polymarket-btc-options</string>
+
+    <!-- 07:45 local: clear of funding_drift at 08:15 and odds_data at 11:30, so
+         the three jobs never contend for the network or the website checkout.
+         The payload samples the trailing 24h, so the hour is not load-bearing. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>7</integer>
+        <key>Minute</key><integer>45</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

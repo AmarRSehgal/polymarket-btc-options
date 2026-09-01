@@ -89,7 +89,10 @@ Polymarket API  ──> polymarket.py (market discovery) ───────�
 | `research/voldiag.py` | Scale/shape diagnostics for the vol estimator |
 | `research/collect.py` | Record live books to JSONL |
 | `research/evaluate.py` | Grade a recording under a cost ladder |
+| `generate_web_monitor.py` | Daily monitor payload for the portfolio site |
+| `run_daily.sh` + `com.amar.polymarket_btc.plist` | launchd job that regenerates it |
 | `test_pricing.py` | Unit tests (24) |
+| `test_web_monitor.py` | Payload validator tests (14) |
 
 ## Usage
 
@@ -488,10 +491,43 @@ model behind the market price on Brier. The estimator is doing real work; it is
 just not enough work to overcome a better-informed counterparty and a 1.75c fee,
 and the only thing that actually pays is seeing BTC before the quote moves.
 
+## Published monitor
+
+A launchd job re-runs this repo's own measurement every morning at 07:45 local
+and writes `web/btc_monitor.json` for the portfolio site.
+
+**It publishes an observation, not picks.** Since the measured verdict is that
+there is no edge, a ranked "opportunities" feed would be publishing noise. What
+goes out instead is the scorecard itself, recomputed daily on the last ~24h of
+settled windows: model Brier vs market Brier, the latency curve with its
+future-BTC placebo rung, and the interpolated break-even lag. If the verdict
+ever flips, that is where it shows up first.
+
+```bash
+python3 generate_web_monitor.py --output web/btc_monitor.json
+python3 generate_web_monitor.py --validate web/btc_monitor.json
+python3 generate_web_monitor.py --status --fail-if-stale --output web/btc_monitor.json
+
+~/personal/automation/install_job.sh ~/personal/polymarket-btc-options com.amar.polymarket_btc
+launchctl kickstart -p gui/$(id -u)/com.amar.polymarket_btc      # run it now
+```
+
+`track_record` is always `null`, and the validator enforces it: the website's
+`predictions/README.md` house rule is that a page may quote a model's skill only
+if that skill is real, and a 3-sigma ROI from a model the market out-forecasts
+is not. The validator also refuses a negative-lag row that is not flagged
+`placebo` -- unflagged, future-BTC lookahead would render as the best number on
+the page.
+
+The job does **not** git-push the site. It writes into this repo and, if
+`POLYMARKET_WEB_DEST` is set, mirrors the payload into a website checkout;
+committing stays a human step. Mechanism and gotchas:
+`~/personal/automation/LAUNCHD.md`.
+
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest test_pricing.py   # 24 tests
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 38 tests (24 pricing + 14 payload)
 ```
 
 ## Research tooling
