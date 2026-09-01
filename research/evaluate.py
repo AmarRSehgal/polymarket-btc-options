@@ -14,7 +14,6 @@ model would have made under a ladder of increasingly realistic assumptions:
 from __future__ import annotations
 
 import json
-import math
 import pathlib
 import sys
 
@@ -82,7 +81,7 @@ def fetch_outcomes(session, window_tss) -> dict[int, str]:
     return out
 
 
-def best(levels, side: str) -> float:
+def best(levels) -> float:
     if not levels:
         return 0.0
     return float(levels[0][0])
@@ -118,10 +117,10 @@ def run(samples, spot, strikes, outcomes, halflife: int, bar_interval: float):
         fee_rate = float((s["meta"].get("fee_schedule") or {}).get("rate", 0.0))
         lookback = float((s["meta"].get("crypto_config") or {}).get("twapLookbackSeconds", 0.0))
 
-        up_bid = best(s["books"]["up"]["bids"], "b")
-        up_ask = best(s["books"]["up"]["asks"], "a")
-        dn_bid = best(s["books"]["down"]["bids"], "b")
-        dn_ask = best(s["books"]["down"]["asks"], "a")
+        up_bid = best(s["books"]["up"]["bids"])
+        up_ask = best(s["books"]["up"]["asks"])
+        dn_bid = best(s["books"]["down"]["bids"])
+        dn_ask = best(s["books"]["down"]["asks"])
         if not (up_bid and up_ask and dn_bid and dn_ask):
             continue
         spreads.append(up_ask - up_bid)
