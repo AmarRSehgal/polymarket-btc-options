@@ -37,6 +37,12 @@ next question is whether quoting, rather than taking, turns that into money.
 | `maker_mid` | resting quotes | Polymarket mid -- no outside information, the control for the lead |
 | `maker_model` | resting quotes | N(d2) |
 | `maker_anchored` | resting quotes | the mid moved by the Binance-implied change since its recent average (logit space) |
+| `maker_composite` | resting quotes | as `maker_anchored`, with BTC a spread-weighted Binance + OKX mid (added 2026-09-25 after 23 windows; scored on the windows it ran) |
+
+The composite (`fairvalue.CompositeSpot`) weights each venue by 1/spread^2 on an EW
+spread, floored at 0.5bp so OKX's $0.10 tick against Binance's $0.01 does not by
+itself cost OKX its weight; a venue quiet for 2s drops out, and a >50bp
+disagreement pulls quotes rather than guessing which venue is wrong.
 
 The makers share one market websocket (`clob_ws.py`), one Binance best
 bid/offer stream, and one book, and differ only in fair value (`fairvalue.py`).
@@ -582,7 +588,7 @@ committing stays a human step. Mechanism and gotchas:
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 56 tests (pricing, payload, maker)
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 59 tests (pricing, payload, maker)
 ```
 
 ## Research tooling

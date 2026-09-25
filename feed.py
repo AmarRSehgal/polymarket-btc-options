@@ -80,6 +80,7 @@ class BinanceBookTicker:
         self._callbacks: list = []
         self._running = False
         self.mid = 0.0
+        self.spread = 0.0
         self.updated = 0.0
 
     def on_mid(self, callback):
@@ -96,7 +97,8 @@ class BinanceBookTicker:
                     reconnect_delay = 1.0
                     async for raw in ws:
                         msg = json.loads(raw)
-                        self.mid = (float(msg["b"]) + float(msg["a"])) / 2.0
+                        bid, ask = float(msg["b"]), float(msg["a"])
+                        self.mid, self.spread = (bid + ask) / 2.0, ask - bid
                         self.updated = time.time()
                         for cb in self._callbacks:
                             cb(self.mid, self.updated)
@@ -104,6 +106,48 @@ class BinanceBookTicker:
                 break
             except Exception as e:
                 logger.error("Book feed disconnected: %s. Reconnect in %.1fs", e, reconnect_delay)
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 30.0)
+
+    def stop(self):
+        self._running = False
+
+
+OKX_WS = "wss://ws.okx.com:8443/ws/v5/public"
+
+
+class OkxBBO:
+    """OKX BTC-USDT top of book (`bbo-tbt`, tick by tick), same shape as BinanceBookTicker."""
+
+    def __init__(self, inst: str = "BTC-USDT"):
+        self.inst = inst
+        self.mid = 0.0
+        self.spread = 0.0
+        self.updated = 0.0
+        self._running = False
+
+    async def run(self):
+        import time
+        self._running = True
+        reconnect_delay = 1.0
+        while self._running:
+            try:
+                async with websockets.connect(OKX_WS, ping_interval=20, ping_timeout=10) as ws:
+                    await ws.send(json.dumps({"op": "subscribe",
+                                              "args": [{"channel": "bbo-tbt", "instId": self.inst}]}))
+                    logger.info("Connected to %s %s", OKX_WS, self.inst)
+                    reconnect_delay = 1.0
+                    async for raw in ws:
+                        for d in json.loads(raw).get("data") or ():
+                            if not d.get("bids") or not d.get("asks"):
+                                continue
+                            bid, ask = float(d["bids"][0][0]), float(d["asks"][0][0])
+                            self.mid, self.spread = (bid + ask) / 2.0, ask - bid
+                            self.updated = time.time()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("OKX feed disconnected: %s. Reconnect in %.1fs", e, reconnect_delay)
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, 30.0)
 

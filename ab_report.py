@@ -31,6 +31,8 @@ ARMS = {
     "maker_model": ("treatment", "Rests quotes around the N(d2) model price."),
     "maker_anchored": ("treatment", "Rests quotes around the Polymarket mid moved by the Binance-implied change "
                                     "since its recent average."),
+    "maker_composite": ("treatment", "As maker_anchored, with BTC a spread-weighted Binance + OKX mid "
+                                     "(added 2026-09-25, after the other arms; compared on the windows it ran)."),
 }
 
 KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence after {MIN_WINDOWS} "
@@ -80,7 +82,17 @@ def max_drawdown(series: list[float]) -> float:
 
 def build() -> dict:
     outcomes = {r["window_ts"]: r["outcome"] for r in read("settlements.jsonl")}
-    observed = sorted({r["window_ts"] for r in read("windows.jsonl")} & outcomes.keys())
+    # Arms added later carry their own window set: the windows.jsonl rows written
+    # before an arm existed do not list it (and rows from before the list existed
+    # hold the original four).
+    original = ("taker_v1", "maker_mid", "maker_model", "maker_anchored")
+    ran: dict[str, set[int]] = {a: set() for a in ARMS}
+    for r in read("windows.jsonl"):
+        if r["window_ts"] in outcomes:
+            for a in r.get("arms") or original:
+                if a in ran:
+                    ran[a].add(r["window_ts"])
+    observed = sorted(set().union(*ran.values()))
     per_window: dict[str, dict[int, float]] = {a: defaultdict(float) for a in ARMS}
     stats: dict[str, dict] = {a: defaultdict(float) for a in ARMS}
     markouts: dict[str, dict[str, list[float]]] = {a: defaultdict(list) for a in ARMS}
@@ -117,8 +129,9 @@ def build() -> dict:
 
     arms = []
     for a, (role, desc) in ARMS.items():
-        xs = [per_window[a].get(w, 0.0) for w in observed]
-        st, n = stats[a], len(observed)
+        mine = sorted(ran[a])
+        xs = [per_window[a].get(w, 0.0) for w in mine]
+        st, n = stats[a], len(mine)
         total = sum(xs)
         lo, hi = boot_mean_ci(xs)
         mk = {h: round(sum(v) / len(v), 3) for h, v in sorted(markouts[a].items(), key=lambda kv: int(kv[0])) if v}
@@ -138,11 +151,11 @@ def build() -> dict:
         })
 
     comparisons = []
-    base = [per_window["taker_v1"].get(w, 0.0) for w in observed]
     for a in ARMS:
         if a == "taker_v1":
             continue
-        diff = [per_window[a].get(w, 0.0) - b for w, b in zip(observed, base)]
+        both = sorted(ran[a] & ran["taker_v1"])
+        diff = [per_window[a].get(w, 0.0) - per_window["taker_v1"].get(w, 0.0) for w in both]
         lo, hi = boot_mean_ci(diff)
         n = len(diff)
         if n < MIN_WINDOWS:
@@ -162,8 +175,8 @@ def build() -> dict:
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
         "venue": "Polymarket", "paper": True, "started": "2026-09-25",
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
-        "status": "verdict" if len(observed) >= MIN_WINDOWS else "collecting",
-        "headline": headline(len(observed), arms, comparisons),
+        "status": "verdict" if len(ran["taker_v1"]) >= MIN_WINDOWS else "collecting",
+        "headline": headline(len(ran["taker_v1"]), arms, comparisons),
         "arms": arms, "comparisons": comparisons,
         "kill_criteria": KILL, "caveats": CAVEATS,
     }

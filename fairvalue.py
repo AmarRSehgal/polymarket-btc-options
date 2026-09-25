@@ -85,3 +85,55 @@ def prob_sigma_c(S: float, K: float, t_eff: float, sigma: float, horizon_s: floa
     up = binary_call_price(S * math.exp(h), K, t_eff, sigma)
     dn = binary_call_price(S * math.exp(-h), K, t_eff, sigma)
     return abs(up - dn) / 2.0 * 100.0
+
+
+class CompositeSpot:
+    """Weighted mid across spot venues: w_i ~ 1 / max(spread_bps_i, floor)^2.
+
+    Weights use an EW average of each venue's spread (half-life minutes), so the
+    composite does not jitter as spreads flicker. The floor matters: Binance
+    quotes a $0.01 tick and OKX $0.10, so raw inverse-spread-squared would hand
+    OKX ~1% of the weight for its tick size alone. Floored at 0.5bp, two tight
+    books weigh equally and a venue loses weight only when it genuinely widens.
+
+    A venue older than `stale_s` drops out and the rest renormalise. If the
+    venues disagree by more than `max_gap_bps`, one of them is wrong and there
+    is no telling which from two, so the composite reports None and the arm pulls.
+    """
+
+    def __init__(self, names: tuple[str, ...], spread_half_life_s: float = 300.0,
+                 floor_bps: float = 0.5, stale_s: float = 2.0, max_gap_bps: float = 50.0):
+        self.names = names
+        self.h, self.floor, self.stale_s, self.max_gap = spread_half_life_s, floor_bps, stale_s, max_gap_bps
+        self.ew_spread: dict[str, float] = {}
+        self._t: dict[str, float] = {}
+        self.weights: dict[str, float] = {}
+        self.dropped: dict[str, int] = {n: 0 for n in names}
+        self.gaps = 0
+
+    def value(self, now: float, quotes: dict[str, tuple[float, float, float]]) -> float | None:
+        """quotes: name -> (mid, spread, updated). Returns the composite mid or None."""
+        live = {}
+        for n in self.names:
+            mid, spread, upd = quotes[n]
+            if mid <= 0 or now - upd > self.stale_s:
+                self.dropped[n] += 1
+                continue
+            bps = spread / mid * 1e4
+            if n in self.ew_spread:
+                a = 1 - 0.5 ** (max(now - self._t[n], 0.0) / self.h)
+                self.ew_spread[n] += a * (bps - self.ew_spread[n])
+            else:
+                self.ew_spread[n] = bps
+            self._t[n] = now
+            live[n] = mid
+        if not live:
+            return None
+        mids = list(live.values())
+        if (max(mids) - min(mids)) / min(mids) * 1e4 > self.max_gap:
+            self.gaps += 1
+            return None
+        raw = {n: 1.0 / max(self.ew_spread[n], self.floor) ** 2 for n in live}
+        tot = sum(raw.values())
+        self.weights = {n: w / tot for n, w in raw.items()}
+        return sum(self.weights[n] * live[n] for n in live)

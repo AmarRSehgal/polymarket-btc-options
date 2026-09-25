@@ -137,3 +137,26 @@ def test_prob_sigma_peaks_at_the_money():
     atm = prob_sigma_c(100_000, 100_000, 120, 0.4, 5)
     otm = prob_sigma_c(100_300, 100_000, 120, 0.4, 5)
     assert atm > otm > 0
+
+
+from fairvalue import CompositeSpot
+
+
+def test_composite_ignores_tick_size_difference():
+    c = CompositeSpot(("binance", "okx"))
+    v = c.value(10.0, {"binance": (84_000.00, 0.01, 10.0), "okx": (84_010.0, 0.10, 10.0)})
+    assert v == pytest.approx(84_005.0)
+    assert c.weights["binance"] == pytest.approx(0.5)
+
+
+def test_composite_downweights_a_wide_venue():
+    c = CompositeSpot(("binance", "okx"))
+    c.value(10.0, {"binance": (84_000.0, 0.01, 10.0), "okx": (84_000.0, 42.0, 10.0)})  # okx 5bp wide
+    assert c.weights["okx"] < 0.02
+
+
+def test_composite_drops_stale_and_refuses_disagreement():
+    c = CompositeSpot(("binance", "okx"), stale_s=2.0, max_gap_bps=50.0)
+    assert c.value(10.0, {"binance": (84_000.0, 0.01, 10.0), "okx": (90_000.0, 0.1, 5.0)}) == 84_000.0
+    assert c.value(10.0, {"binance": (84_000.0, 0.01, 10.0), "okx": (85_000.0, 0.1, 10.0)}) is None
+    assert c.value(10.0, {"binance": (84_000.0, 0.01, 1.0), "okx": (84_000.0, 0.1, 1.0)}) is None
