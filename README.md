@@ -36,9 +36,11 @@ next question is whether quoting, rather than taking, turns that into money.
 | `taker_v1` | `main.py`'s EdgeFinder + Simulator, unchanged (REST poll, buys the ask) | N(d2) |
 | `maker_mid` | resting quotes | Polymarket mid -- no outside information, the control for the lead |
 | `maker_model` | resting quotes | N(d2) |
-| `maker_anchored` | resting quotes | the mid moved by the Binance-implied change since its recent average (logit space) |
-| `maker_composite` | resting quotes | as `maker_anchored`, with BTC a spread-weighted Binance + OKX mid (added 2026-09-25 after 23 windows; scored on the windows it ran) |
+| `maker_anchored` | resting quotes | the mid moved by the spot-implied change since its recent average (logit space) |
 
+Every maker reads BTC as a spread-weighted Binance + OKX mid; the taker keeps the Binance
+feed it was written against. Makers are scored from 2026-09-25, when they moved to the
+composite (earlier Binance-only maker windows are not counted).
 The composite (`fairvalue.CompositeSpot`) weights each venue by 1/spread^2 on an EW
 spread, floored at 0.5bp so OKX's $0.10 tick against Binance's $0.01 does not by
 itself cost OKX its weight; a venue quiet for 2s drops out, and a >50bp

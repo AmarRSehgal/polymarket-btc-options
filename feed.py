@@ -92,7 +92,7 @@ class BinanceBookTicker:
         reconnect_delay = 1.0
         while self._running:
             try:
-                async with websockets.connect(self._url, ping_interval=20, ping_timeout=10) as ws:
+                async with websockets.connect(self._url, ping_interval=20, ping_timeout=10, max_queue=None) as ws:
                     logger.info("Connected to %s", self._url)
                     reconnect_delay = 1.0
                     async for raw in ws:
@@ -132,7 +132,7 @@ class OkxBBO:
         reconnect_delay = 1.0
         while self._running:
             try:
-                async with websockets.connect(OKX_WS, ping_interval=20, ping_timeout=10) as ws:
+                async with websockets.connect(OKX_WS, ping_interval=20, ping_timeout=10, max_queue=None) as ws:
                     await ws.send(json.dumps({"op": "subscribe",
                                               "args": [{"channel": "bbo-tbt", "instId": self.inst}]}))
                     logger.info("Connected to %s %s", OKX_WS, self.inst)

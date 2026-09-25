@@ -16,6 +16,10 @@
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/amar/personal/polymarket-btc-options</string>
+    <!-- Not throttled as a background job: the arms read market websockets at
+         ~1k msgs/s and a napped event loop gets disconnected. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>StartInterval</key>
     <integer>600</integer>
     <key>RunAtLoad</key>

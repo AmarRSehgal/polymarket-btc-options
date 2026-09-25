@@ -29,10 +29,8 @@ ARMS = {
     "maker_mid": ("treatment", "Rests quotes around the Polymarket mid. No outside information -- measures "
                                "what passive quoting alone is worth."),
     "maker_model": ("treatment", "Rests quotes around the N(d2) model price."),
-    "maker_anchored": ("treatment", "Rests quotes around the Polymarket mid moved by the Binance-implied change "
+    "maker_anchored": ("treatment", "Rests quotes around the Polymarket mid moved by the spot-implied change "
                                     "since its recent average."),
-    "maker_composite": ("treatment", "As maker_anchored, with BTC a spread-weighted Binance + OKX mid "
-                                     "(added 2026-09-25, after the other arms; compared on the windows it ran)."),
 }
 
 KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence after {MIN_WINDOWS} "
@@ -41,6 +39,8 @@ KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence 
         "These were written before the first paper fill (2026-09-25) and are not moved after seeing results."]
 
 CAVEATS = [
+    "Every maker reads BTC as a spread-weighted Binance + OKX mid; the taker keeps its original Binance "
+    "feed. Maker windows are counted from 2026-09-25, when they moved to the composite.",
     "Paper fills. A resting order joins the back of its price level, goes live 0.4s after it is sent, "
     "and fills only when a real print reaches it; a cancel takes 0.4s and can still be filled meanwhile.",
     "Maker rebates are ignored and the taker pays the published fee, so the maker side is understated.",
@@ -85,12 +85,21 @@ def build() -> dict:
     # Arms added later carry their own window set: the windows.jsonl rows written
     # before an arm existed do not list it (and rows from before the list existed
     # hold the original four).
-    original = ("taker_v1", "maker_mid", "maker_model", "maker_anchored")
+    original = ("taker_v1", "maker_mid", "maker_model", "maker_anchored")  # rows before "arms" existed
     ran: dict[str, set[int]] = {a: set() for a in ARMS}
+    # A window written by two processes (a restart mid-window) is only a maker window
+    # if every writer was on the composite; otherwise its fills mix two fair values.
+    mixed = defaultdict(set)
     for r in read("windows.jsonl"):
+        mixed[r["window_ts"]].add(r.get("spot"))
+    for r in read("windows.jsonl"):
+        if mixed[r["window_ts"]] != {"composite"}:
+            r = {**r, "spot": None}
         if r["window_ts"] in outcomes:
             for a in r.get("arms") or original:
-                if a in ran:
+                # The makers moved to the Binance + OKX composite on 2026-09-25; the
+                # Binance-only windows before that are a different arm and are not scored.
+                if a in ran and (a == "taker_v1" or r.get("spot") == "composite"):
                     ran[a].add(r["window_ts"])
     observed = sorted(set().union(*ran.values()))
     per_window: dict[str, dict[int, float]] = {a: defaultdict(float) for a in ARMS}
@@ -99,7 +108,7 @@ def build() -> dict:
 
     for f in read("fills.jsonl"):
         a, w = f["arm"], f["window_ts"]
-        if a not in ARMS or w not in outcomes:
+        if a not in ARMS or w not in ran[a]:
             continue
         s = 1 if f["side"] == "buy" else -1
         payout = 100.0 if outcomes[w] == "up" else 0.0
@@ -116,7 +125,7 @@ def build() -> dict:
 
     for t in read("taker_v1.jsonl"):
         w = t["window_ts"]
-        if w not in outcomes:
+        if w not in ran["taker_v1"]:
             continue
         cost = t["entry"] + t["fee"]
         pnl = (1.0 if t["side"] == outcomes[w] else 0.0) - cost
@@ -185,8 +194,9 @@ def build() -> dict:
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
         "venue": "Polymarket", "paper": True, "started": "2026-09-25",
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
-        "status": "verdict" if len(ran["taker_v1"]) >= MIN_WINDOWS else "collecting",
-        "headline": headline(len(ran["taker_v1"]), arms, comparisons),
+        # The sample is the smallest arm's: every maker has to reach it on its own windows.
+        "status": "verdict" if min(len(v) for v in ran.values()) >= MIN_WINDOWS else "collecting",
+        "headline": headline(min(len(v) for v in ran.values()), arms, comparisons),
         "arms": arms, "comparisons": comparisons, "daily": daily,
         "kill_criteria": KILL, "caveats": CAVEATS,
     }

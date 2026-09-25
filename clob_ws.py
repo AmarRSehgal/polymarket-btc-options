@@ -105,6 +105,7 @@ class MarketStream:
         self.on_trade = on_trade
         self.book = UpBook()
         self.messages = 0
+        self.drops = 0
         self._seen_tx: OrderedDict[str, None] = OrderedDict()
         self._stop = False
 
@@ -138,8 +139,11 @@ class MarketStream:
         backoff = 1.0
         while not self._stop and time.time() < until:
             try:
+                # max_queue=None: the library default (16 frames, ~20ms of this feed) stops
+                # reading the socket on any event-loop hiccup, and Polymarket then drops
+                # the connection as a "slow consumer" -- 19 times in 3h on 2026-09-25.
                 async with websockets.connect(MARKET_WS, ping_interval=10, ping_timeout=10,
-                                              max_size=None, open_timeout=10) as ws:
+                                              max_size=None, max_queue=None, open_timeout=10) as ws:
                     await ws.send(json.dumps({"assets_ids": [self.up_token, self.down_token],
                                               "type": "market"}))
                     backoff = 1.0
@@ -159,6 +163,7 @@ class MarketStream:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                self.drops += 1
                 logger.warning("market ws error: %s; reconnect in %.0fs", e, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
