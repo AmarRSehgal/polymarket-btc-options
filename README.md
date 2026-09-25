@@ -58,9 +58,13 @@ windows; a maker whose mean PnL per window is below zero at 95% after that is
 stopped; a negative mean 5s markout after 500 fills means it is being picked
 off, and it is stopped.
 
-Jobs: `com.amar.polymarket_btc_paper` (KeepAlive, logs in `logs/paper_ab.log`,
-data in `paper_data/`), scored and pushed to the website as
-`predictions/pm_btc_paper.json` by the existing 07:45 `run_daily.sh`.
+Schedule: `com.amar.polymarket_btc_paper_session` fires hourly and
+`run_session.sh` runs one 2-hour session per day in the first hour the Mac is
+awake (`SESSION_S` overrides), then scores it and pushes
+`predictions/pm_btc_paper.json` to the website. ~24 windows a session, so the
+200-window verdict is about nine sessions out. Logs in `logs/paper_ab.log`,
+data in `paper_data/`; windows still settling when a session ends are settled
+by the next one.
 
 ## How It Works
 

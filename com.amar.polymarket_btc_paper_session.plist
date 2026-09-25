@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.amar.polymarket_btc_paper_session</string>
+    <!-- Hourly check; run_session.sh runs one 2h paper session per day, then publishes. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/amar/personal/polymarket-btc-options/run_session.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/amar/personal/polymarket-btc-options</string>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd_session.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd_session.err</string>
+</dict>
+</plist>
