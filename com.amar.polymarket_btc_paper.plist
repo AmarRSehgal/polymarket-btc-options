@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.amar.polymarket_btc_paper</string>
+    <!-- The paper A/B runner, long-running. Scored and published by run_daily.sh. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>-u</string>
+        <string>PYTHONPATH</string>
+        <string>/opt/local/bin/python3.13</string>
+        <string>/Users/amar/personal/polymarket-btc-options/paper_ab.py</string>
+        <string>--log-file</string>
+        <string>/Users/amar/personal/polymarket-btc-options/logs/paper_ab.log</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/amar/personal/polymarket-btc-options</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd_paper.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/amar/personal/polymarket-btc-options/logs/launchd_paper.err</string>
+</dict>
+</plist>

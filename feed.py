@@ -62,3 +62,50 @@ class BinanceFeed:
 
     def stop(self):
         self._running = False
+
+
+BINANCE_WS_BOOK = "wss://stream.binance.com:9443/ws/btcusdt@bookTicker"
+
+
+class BinanceBookTicker:
+    """Best bid/offer mid, pushed. The paper maker's fast reference.
+
+    The mid is used rather than the last trade: an aggTrade price bounces between
+    bid and ask, which reads as volatility and as fair-value jitter that is not there.
+    The spot bookTicker stream carries no event time, so `updated` is local receipt.
+    """
+
+    def __init__(self, url: str = BINANCE_WS_BOOK):
+        self._url = url
+        self._callbacks: list = []
+        self._running = False
+        self.mid = 0.0
+        self.updated = 0.0
+
+    def on_mid(self, callback):
+        self._callbacks.append(callback)
+
+    async def run(self):
+        import time
+        self._running = True
+        reconnect_delay = 1.0
+        while self._running:
+            try:
+                async with websockets.connect(self._url, ping_interval=20, ping_timeout=10) as ws:
+                    logger.info("Connected to %s", self._url)
+                    reconnect_delay = 1.0
+                    async for raw in ws:
+                        msg = json.loads(raw)
+                        self.mid = (float(msg["b"]) + float(msg["a"])) / 2.0
+                        self.updated = time.time()
+                        for cb in self._callbacks:
+                            cb(self.mid, self.updated)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Book feed disconnected: %s. Reconnect in %.1fs", e, reconnect_delay)
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 30.0)
+
+    def stop(self):
+        self._running = False

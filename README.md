@@ -24,6 +24,44 @@ Live edge detection for Polymarket's BTC 5-minute Up/Down markets using Black-Sc
 > See [Does the edge exist?](#does-the-edge-exist) before trusting any number
 > this tool prints. It remains a simulator and places no real orders.
 
+## Paper A/B: taker against makers (running since 2026-09-25)
+
+The finding above is about *taking*. Resting orders pay no fee here
+(`takerOnly`), and the one thing that measurably pays is BTC freshness -- so the
+next question is whether quoting, rather than taking, turns that into money.
+`paper_ab.py` runs four arms in one process over the same windows:
+
+| arm | trades by | fair value |
+|---|---|---|
+| `taker_v1` | `main.py`'s EdgeFinder + Simulator, unchanged (REST poll, buys the ask) | N(d2) |
+| `maker_mid` | resting quotes | Polymarket mid -- no outside information, the control for the lead |
+| `maker_model` | resting quotes | N(d2) |
+| `maker_anchored` | resting quotes | the mid moved by the Binance-implied change since its recent average (logit space) |
+
+The makers share one market websocket (`clob_ws.py`), one Binance best
+bid/offer stream, and one book, and differ only in fair value (`fairvalue.py`).
+Quotes come from an edge curve in cents (`maker.py`): base + one sigma of the
+probability's 5s move + a skew against inventory, improving the touch by at
+most one tick, never crossing, pulled 60s before the close (where the TWAP
+starts and the model is blind) and held to Polymarket's own settlement.
+
+Fills are pessimistic (`paper_venue.py`): back of the queue at the order's own
+price, 0.4s to go live and to cancel, only a real print can fill, maker rebates
+ignored. Up and Down prints are both used, mapped to Up terms.
+
+Scoring is `ab_report.py`: per-window PnL for every arm over the same settled
+windows (sitting out counts as zero), bootstrap intervals over windows, paired
+differences against `taker_v1`, 5/30/60s markouts, edge at fill.
+
+**Kill criteria, fixed before the first fill:** no verdict before 200 settled
+windows; a maker whose mean PnL per window is below zero at 95% after that is
+stopped; a negative mean 5s markout after 500 fills means it is being picked
+off, and it is stopped.
+
+Jobs: `com.amar.polymarket_btc_paper` (KeepAlive, logs in `logs/paper_ab.log`,
+data in `paper_data/`), scored and pushed to the website as
+`predictions/pm_btc_paper.json` by the existing 07:45 `run_daily.sh`.
+
 ## How It Works
 
 Every 5 minutes, Polymarket creates a new binary market: "Will BTC be higher or lower than the opening price at window close?" The Up token pays $1 if BTC finishes above the opening price, $0 otherwise. Down is the inverse.
@@ -540,7 +578,7 @@ committing stays a human step. Mechanism and gotchas:
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 38 tests (24 pricing + 14 payload)
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 56 tests (pricing, payload, maker)
 ```
 
 ## Research tooling

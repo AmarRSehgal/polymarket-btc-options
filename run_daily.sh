@@ -55,6 +55,31 @@ notify() {
         notify "payload is stale - the daily scan may have stopped running"
     fi
 
+    # The paper A/B (paper_ab.py, its own KeepAlive job) is scored here and published.
+    # Unlike the monitor above this one IS pushed: it is a running record, and the
+    # validator refuses a verdict on a sample below the size fixed before the first fill.
+    SITE="${WEBSITE_DIR:-$HOME/personal/website}"
+    AB="$PROJECT_DIR/web/pm_btc_paper.json"
+    if env -u PYTHONPATH "$PY" "$PROJECT_DIR/ab_report.py" --output "$AB" \
+        && env -u PYTHONPATH "$PY" "$SITE/.github/scripts/validate_predictions.py" pm_btc_paper "$AB"; then
+        cp "$AB" "$SITE/predictions/pm_btc_paper.json"
+        git -C "$SITE" add predictions/pm_btc_paper.json
+        if git -C "$SITE" diff --cached --quiet -- predictions/pm_btc_paper.json; then
+            echo "paper A/B: no change"
+        elif git -C "$SITE" commit -q -m "polymarket paper A/B: $(date -u +%Y-%m-%d)" -- predictions/pm_btc_paper.json \
+            && git -C "$SITE" push -q origin HEAD; then
+            echo "paper A/B: published"
+        else
+            echo "paper A/B: publish FAILED"; notify "paper A/B publish failed - see logs/run.log"
+        fi
+    else
+        echo "paper A/B: report FAILED"; notify "paper A/B report failed - see logs/run.log"
+    fi
+    STATUS="$PROJECT_DIR/paper_data/status.json"
+    if [ ! -f "$STATUS" ] || [ $(( $(date +%s) - $(stat -f %m "$STATUS") )) -gt 3600 ]; then
+        echo "paper A/B: runner STALE"; notify "paper A/B runner is not running"
+    fi
+
     echo "=== $(date -u '+%Y-%m-%dT%H:%M:%SZ') run end ==="
 } >> "$LOG" 2>&1
 
