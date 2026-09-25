@@ -170,6 +170,16 @@ def build() -> dict:
                             "diff": round(sum(diff) / n, 4) if n else None,
                             "ci": [round(lo, 4), round(hi, 4)] if n >= 2 else None, "verdict": verdict})
 
+    # Per calendar day (local, the session's day), every arm over the windows it ran.
+    by_day: dict[str, dict] = {}
+    for a in ARMS:
+        for w in ran[a]:
+            d = datetime.fromtimestamp(w).date().isoformat()
+            row = by_day.setdefault(d, {"date": d, "pnl": {}, "units": {}})
+            row["pnl"][a] = round(row["pnl"].get(a, 0.0) + per_window[a].get(w, 0.0), 2)
+            row["units"][a] = row["units"].get(a, 0) + 1
+    daily = [by_day[d] for d in sorted(by_day)]
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
@@ -177,7 +187,7 @@ def build() -> dict:
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
         "status": "verdict" if len(ran["taker_v1"]) >= MIN_WINDOWS else "collecting",
         "headline": headline(len(ran["taker_v1"]), arms, comparisons),
-        "arms": arms, "comparisons": comparisons,
+        "arms": arms, "comparisons": comparisons, "daily": daily,
         "kill_criteria": KILL, "caveats": CAVEATS,
     }
 
