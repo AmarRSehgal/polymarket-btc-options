@@ -64,13 +64,18 @@ windows; a maker whose mean PnL per window is below zero at 95% after that is
 stopped; a negative mean 5s markout after 500 fills means it is being picked
 off, and it is stopped.
 
-Schedule: `com.amar.polymarket_btc_paper_session` fires hourly and
-`run_session.sh` runs one 2-hour session per day in the first hour the Mac is
-awake (`SESSION_S` overrides), then scores it and pushes
-`predictions/pm_btc_paper.json` to the website. ~24 windows a session, so the
-200-window verdict is about nine sessions out. Logs in `logs/paper_ab.log`,
-data in `paper_data/`; windows still settling when a session ends are settled
-by the next one.
+Schedule: `com.amar.polymarket_btc_paper_session` fires every 10 minutes and
+`session.py` gives the runner 6 hours a day of **awake** time (`SESSION_HOURS`
+overrides), counted on the monotonic clock, which stops while the lid is closed.
+Closing the laptop mid-session is safe: on wake (`sleepwatch.py`) every resting
+paper order is voided as a cancel-on-disconnect, no fill can come from prints
+made while asleep, markouts whose horizon fell inside the gap are dropped, vol
+is re-warmed rather than reading the gap as one huge return, and the taker is
+held off until its own Binance feed is live again. Positions are kept and held
+to settlement. When the day's budget is spent, `publish_ab.sh` scores and pushes
+`predictions/pm_btc_paper.json`; a day cut short by the lid is published the
+next time the controller starts. Logs in `logs/paper_ab.log` and
+`logs/session.log`, data in `paper_data/`.
 
 ## How It Works
 
@@ -588,7 +593,7 @@ committing stays a human step. Mechanism and gotchas:
 ## Testing
 
 ```bash
-env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 59 tests (pricing, payload, maker)
+env -u PYTHONPATH /opt/local/bin/python3.13 -m pytest                  # 60 tests (pricing, payload, maker)
 ```
 
 ## Research tooling

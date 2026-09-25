@@ -4,16 +4,20 @@
 <dict>
     <key>Label</key>
     <string>com.amar.polymarket_btc_paper_session</string>
-    <!-- Hourly check; run_session.sh runs one 2h paper session per day, then publishes. -->
+    <!-- Every 10 min (and on wake): session.py resumes today's 6h of awake paper time,
+         or exits at once if it is already running or the budget is spent. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>/Users/amar/personal/polymarket-btc-options/run_session.sh</string>
+        <string>/usr/bin/env</string>
+        <string>-u</string>
+        <string>PYTHONPATH</string>
+        <string>/opt/local/bin/python3.13</string>
+        <string>/Users/amar/personal/polymarket-btc-options/session.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/amar/personal/polymarket-btc-options</string>
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>600</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>

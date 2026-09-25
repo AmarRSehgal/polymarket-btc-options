@@ -38,6 +38,7 @@ from paper_venue import PaperVenue
 from polymarket import BINANCE_API, WINDOW_SECONDS, PolymarketClient
 from pricer import binary_call_price, twap_effective_seconds
 from simulator import Simulator
+from sleepwatch import SleepWatch
 from vol import VolEstimator
 
 log = logging.getLogger("paper_ab")
@@ -53,10 +54,18 @@ def append(name: str, row: dict):
 
 
 class LoggingSimulator(Simulator):
-    """The original Simulator with every entry written down. Logic untouched."""
+    """The original Simulator with every entry written down. Logic untouched.
+
+    `ready` is the harness saying the inputs are live: after the laptop wakes the
+    taker's last Binance price can be minutes old until its socket reconnects, and
+    trading on it would be a fill no running system could have had.
+    """
+    ready = staticmethod(lambda: True)
 
     def try_trade(self, window_ts, side, ask_price, model_price, time_remaining,
                   fee_rate=0.0, vol_ready=True):
+        if not self.ready():
+            return None
         pos = super().try_trade(window_ts, side, ask_price, model_price, time_remaining,
                                 fee_rate, vol_ready)
         if pos is not None:
@@ -206,6 +215,12 @@ class PaperAB:
                                 max_per_market=5.0, max_loss_per_window=2.0)
         self.taker.sim = LoggingSimulator(bankroll=100.0, max_exposure_per_market=5.0,
                                           max_loss_per_window=2.0)
+        self._taker_last_trade = 0.0
+        self.taker.feed.on_trade(lambda t: setattr(self, "_taker_last_trade", time.time()))
+        self._resume_at = 0.0
+        self.taker.sim.ready = lambda: (time.time() - self._taker_last_trade < 2.0
+                                        and time.time() >= self._resume_at)
+        self.watch = SleepWatch()
         self._stop = asyncio.Event()
         self._load_unsettled()
 
@@ -260,6 +275,9 @@ class PaperAB:
         ctx = self.ctx
         while not self._stop.is_set():
             now = time.time()
+            slept = self.watch.check()
+            if slept:
+                self._on_wake(now, slept)
             if ctx.stream is not None and ctx.market is not None:
                 ctx.refresh_model(now)
                 for arm in self.arms:
@@ -268,13 +286,33 @@ class PaperAB:
                 self._markouts(now)
             await asyncio.sleep(STEP_S)
 
+    def _on_wake(self, now: float, slept: float):
+        """The laptop was closed. Treat it as a disconnect with cancel-on-disconnect:
+        every resting paper order is gone, no fill may come from prints made while
+        asleep, and nothing trades again until the feeds and the vol are live.
+        Positions are kept and held to settlement, as they would be."""
+        for arm in self.arms:
+            arm.venue.orders.clear()
+            arm.anchor.reset()
+        self.ctx.vol = VolEstimator(bar_interval=60.0, ewma_halflife=30)
+        self.taker.vol = VolEstimator(bar_interval=60.0, ewma_halflife=30)
+        self._resume_at = now + 10.0
+        # A bar spanning the gap would read as one enormous return; re-warm instead.
+        for v in (self.ctx.vol, self.taker.vol):
+            asyncio.get_running_loop().run_in_executor(None, _safe_seed, v)
+        append("events.jsonl", {"t": now, "event": "wake", "slept_s": round(slept, 1)})
+        log.info("woke after %.0fs asleep: paper orders voided, vol re-warming", slept)
+
     def _markouts(self, now: float):
         keep = []
         mid = self.ctx.stream.book.mid_c
         for row in self.ctx.pending_markouts:
             for h in MARKOUT_S:
                 if str(h) not in row["markouts"] and now >= row["t"] + h:
-                    live = self.ctx.market.window_ts == row["window_ts"] and mid is not None
+                    # Only a mid seen at (about) the horizon is a markout; one read
+                    # after the laptop slept through it is not.
+                    live = (self.ctx.market.window_ts == row["window_ts"] and mid is not None
+                            and now - (row["t"] + h) <= 2.0)
                     s = 1 if row["side"] == "buy" else -1
                     row["markouts"][str(h)] = s * (mid - row["price_c"]) if live else None
             if len(row["markouts"]) == len(MARKOUT_S):
@@ -321,6 +359,10 @@ class PaperAB:
 
     async def run(self):
         await asyncio.to_thread(seed_vol, self.ctx.vol)
+        # Seeded like the makers, so a restart or a wake does not leave the taker
+        # sitting out 30 minutes the makers trade through (per-window scoring would
+        # book that as the taker's zeros).
+        await asyncio.to_thread(seed_vol, self.taker.vol)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._stop.set)
@@ -336,6 +378,13 @@ class PaperAB:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _safe_seed(vol: VolEstimator):
+    try:
+        seed_vol(vol)
+    except Exception as e:
+        log.warning("vol re-seed failed (%s); it will warm from the live feed", e)
 
 
 def _read(name: str) -> list[dict]:

@@ -160,3 +160,16 @@ def test_composite_drops_stale_and_refuses_disagreement():
     assert c.value(10.0, {"binance": (84_000.0, 0.01, 10.0), "okx": (90_000.0, 0.1, 5.0)}) == 84_000.0
     assert c.value(10.0, {"binance": (84_000.0, 0.01, 10.0), "okx": (85_000.0, 0.1, 10.0)}) is None
     assert c.value(10.0, {"binance": (84_000.0, 0.01, 1.0), "okx": (84_000.0, 0.1, 1.0)}) is None
+
+
+def test_sleepwatch_sees_only_time_the_monotonic_clock_missed(monkeypatch):
+    import sleepwatch
+    clock = {"wall": 1000.0, "mono": 50.0}
+    monkeypatch.setattr(sleepwatch.time, "time", lambda: clock["wall"])
+    monkeypatch.setattr(sleepwatch.time, "monotonic", lambda: clock["mono"])
+    w = sleepwatch.SleepWatch(threshold_s=5.0)
+    clock["wall"] += 30; clock["mono"] += 30          # awake: both advance
+    assert w.check() == 0.0
+    clock["wall"] += 600; clock["mono"] += 2          # lid closed ~10 minutes
+    assert w.check() == pytest.approx(598.0)
+    assert w.check() == 0.0
