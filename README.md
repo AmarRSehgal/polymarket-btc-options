@@ -46,6 +46,13 @@ spread, floored at 0.5bp so OKX's $0.10 tick against Binance's $0.01 does not by
 itself cost OKX its weight; a venue quiet for 2s drops out, and a >50bp
 disagreement pulls quotes rather than guessing which venue is wrong.
 
+**Latency ladder (since 2026-09-28).** Each maker also runs at five paper order
+latencies -- 0, 100, 200, 300 and 400ms (`maker_<kind>_<ms>ms`) -- all re-quoting every
+50ms so the rungs differ in nothing but latency; the originals keep their 200ms step.
+`ab_report.py` publishes the curve (`latency_curve`): PnL and 5s markout per rung. If
+the 0ms rung loses too, the strategy fails on its own merits; the gap between 0ms and
+400ms is what speed is worth. Data still arrives at the laptop's own delay.
+
 The makers share one market websocket (`clob_ws.py`), one Binance best
 bid/offer stream, and one book, and differ only in fair value (`fairvalue.py`).
 Quotes come from an edge curve in cents (`maker.py`): base + one sigma of the

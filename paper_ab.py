@@ -46,8 +46,9 @@ from vol import VolEstimator
 log = logging.getLogger("paper_ab")
 
 DATA = Path(os.environ.get("PAPER_DATA") or Path(__file__).resolve().parent / "paper_data")
-STEP_S = 0.2
+STEP_S = 0.05     # the latency-ladder arms step every tick; the original makers every 4th (0.2s)
 MARKOUT_S = (5, 30, 60)
+LADDER_MS = (0, 100, 200, 300, 400)   # 400ms is the original makers' latency
 
 
 def append(name: str, row: dict):
@@ -85,9 +86,11 @@ def seed_vol(vol: VolEstimator):
 
 
 class MakerArm:
-    def __init__(self, name: str, fv_kind: str, params: MakerParams, spot: str = "composite"):
+    def __init__(self, name: str, fv_kind: str, params: MakerParams, spot: str = "composite",
+                 latency_s: float = 0.4, step_every: int = 4):
         self.name, self.fv_kind, self.p, self.spot = name, fv_kind, params, spot
-        self.venue = PaperVenue()
+        self.latency_s, self.step_every = latency_s, step_every
+        self.venue = PaperVenue(ack_s=latency_s, cancel_s=latency_s)
         self.anchor = Anchor()
         self.gates: Counter = Counter()
         self.window_ts = 0
@@ -95,7 +98,7 @@ class MakerArm:
         self.fills = 0
 
     def reset(self, window_ts: int):
-        self.venue = PaperVenue()
+        self.venue = PaperVenue(ack_s=self.latency_s, cancel_s=self.latency_s)
         self.anchor.reset()
         self.window_ts = window_ts
         self.position = 0.0
@@ -212,6 +215,11 @@ class PaperAB:
         self.ctx = Context()
         self.arms = [MakerArm("maker_mid", "mid", p), MakerArm("maker_model", "model", p),
                      MakerArm("maker_anchored", "anchored", p)]
+        # Latency ladder: each maker at five order latencies from instant to the original
+        # arms' 400ms, all re-quoting every 50ms so the rungs differ only in latency.
+        for kind in ("mid", "model", "anchored"):
+            for ms in LADDER_MS:
+                self.arms.append(MakerArm(f"maker_{kind}_{ms}ms", kind, p, latency_s=ms / 1000, step_every=1))
         self.taker = EdgeFinder(bar_interval=60.0, ewma_halflife=30, bankroll=100.0,
                                 max_per_market=5.0, max_loss_per_window=2.0)
         self.taker.sim = LoggingSimulator(bankroll=100.0, max_exposure_per_market=5.0,
@@ -277,15 +285,17 @@ class PaperAB:
 
     async def _decide(self):
         ctx = self.ctx
+        tick = 0
         while not self._stop.is_set():
             now = time.time()
             slept = self.watch.check()
             if slept:
                 self._on_wake(now, slept)
+            tick += 1
             if ctx.stream is not None and ctx.market is not None:
                 ctx.refresh_model(now)
                 for arm in self.arms:
-                    if arm.window_ts == ctx.market.window_ts:
+                    if arm.window_ts == ctx.market.window_ts and tick % arm.step_every == 0:
                         arm.step(now, ctx)
                 self._markouts(now)
             await asyncio.sleep(STEP_S)

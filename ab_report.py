@@ -33,6 +33,12 @@ ARMS = {
                                     "since its recent average."),
 }
 
+LADDER_MS = (0, 100, 200, 300, 400)
+for _k in ("mid", "model", "anchored"):
+    for _ms in LADDER_MS:
+        ARMS[f"maker_{_k}_{_ms}ms"] = ("treatment", f"maker_{_k} at {_ms}ms order latency, re-quoting every 50ms "
+                                                   "(latency ladder).")
+
 KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence after {MIN_WINDOWS} "
         "settled windows is stopped.",
         "A maker arm with a negative mean 5s markout after 500 fills is being picked off; stopped.",
@@ -157,6 +163,7 @@ def build() -> dict:
             "edge_at_fill_c": round(st["captured_c"] / st["shares"], 3) if st["shares"] and role == "treatment" else None,
             "markouts_c": mk or None,
             "fees": round(st["fees"], 2),
+            "ladder": ladder_of(a),
         })
 
     comparisons = []
@@ -189,28 +196,53 @@ def build() -> dict:
             row["units"][a] = row["units"].get(a, 0) + 1
     daily = [by_day[d] for d in sorted(by_day)]
 
+    # One row per rung per strategy: how PnL, markouts and fills move with latency.
+    by_name = {r["name"]: r for r in arms}
+    curve = []
+    for strat in ("maker_mid", "maker_model", "maker_anchored"):
+        rungs = []
+        for ms in LADDER_MS:
+            r = by_name[f"{strat}_{ms}ms"]
+            rungs.append({"latency_ms": ms, "arm": r["name"], "units": r["units"], "fills": r["fills"],
+                          "pnl": r["pnl"], "pnl_per_unit": r["pnl_per_unit"], "pnl_per_unit_ci": r["pnl_per_unit_ci"],
+                          "markout_c": (r["markouts_c"] or {}).get("5")})
+        curve.append({"strategy": strat, "markout_horizon_s": 5, "rungs": rungs})
+    decided = [c for c in comparisons if c["verdict"] != "collecting"]
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
         "venue": "Polymarket", "paper": True, "started": "2026-09-25",
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
-        # The sample is the smallest arm's: every maker has to reach it on its own windows.
-        "status": "verdict" if min(len(v) for v in ran.values()) >= MIN_WINDOWS else "collecting",
-        "headline": headline(min(len(v) for v in ran.values()), arms, comparisons),
-        "arms": arms, "comparisons": comparisons, "daily": daily,
+        # Each comparison carries its own verdict once ITS arm has the sample; the ladder
+        # arms joined later and say "collecting" until they get there.
+        "status": "verdict" if decided else "collecting",
+        "headline": headline(min(len(ran[c["treatment"]] & ran["taker_v1"]) for c in comparisons)
+                             if not decided else MIN_WINDOWS, arms, decided or comparisons),
+        "arms": arms, "comparisons": comparisons, "daily": daily, "latency_curve": curve,
         "kill_criteria": KILL, "caveats": CAVEATS,
     }
+
+
+def ladder_of(name: str) -> dict | None:
+    """{"strategy", "latency_ms"} for a ladder arm, None for the originals."""
+    if not name.endswith("ms") or name.count("_") < 2:
+        return None
+    strat, ms = name.rsplit("_", 1)
+    return {"strategy": strat, "latency_ms": int(ms[:-2])}
 
 
 def headline(n: int, arms: list[dict], comps: list[dict]) -> str:
     if n < MIN_WINDOWS:
         return (f"Collecting: {n} of {MIN_WINDOWS} settled windows before any arm is scored. "
                 "Numbers below are running totals, not results.")
+    comps = [c for c in comps if c["ci"]]
     best = max(comps, key=lambda c: c["diff"] if c["diff"] is not None else -1e9)
     lo, hi = best["ci"]
     word = {"better": "beats", "worse": "trails", "indistinguishable": "cannot yet be told apart from"}[best["verdict"]]
-    return (f"After {n} settled windows the best maker ({best['treatment']}) {word} the original taker by "
-            f"${best['diff']:+.3f} per window (95% CI ${lo:+.3f} to ${hi:+.3f}).")
+    return (f"The best scored maker ({best['treatment']}) {word} the original taker by "
+            f"${best['diff']:+.3f} per window (95% CI ${lo:+.3f} to ${hi:+.3f}). "
+            "Latency-ladder arms are still collecting.")
 
 
 def main():
