@@ -29,6 +29,8 @@ notify() {
 
 {
     echo "=== $(date -u '+%Y-%m-%dT%H:%M:%SZ') run start ==="
+    NETWAIT="$HOME/personal/automation/wait_for_network.sh"
+    if [ -x "$NETWAIT" ] && ! "$NETWAIT"; then echo "ABORT: no network"; exit 1; fi
 
     # Never inherit the work-repo PYTHONPATH: bare python3 on this Mac is the
     # work trading venv. See LAUNCHD.md "The interpreter".

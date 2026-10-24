@@ -15,11 +15,12 @@ import argparse
 import json
 import random
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "paper_data"
+DOWNTIME = Path.home() / "personal" / "automation" / "downtime.json"
 MIN_WINDOWS = 200          # no verdict before this many settled windows, fixed before the first fill
 BOOT = 2000
 
@@ -51,7 +52,8 @@ CAVEATS = [
     "and fills only when a real print reaches it; a cancel takes 0.4s and can still be filled meanwhile.",
     "Maker rebates are ignored and the taker pays the published fee, so the maker side is understated.",
     "Only prints on the websocket move the paper queue; hidden or cross-matched liquidity is not modelled.",
-    "One process, one laptop: windows lost to sleep or a network drop are lost for every arm at once.",
+    "One process, one laptop: windows lost to sleep or a network drop are lost for every arm at once, "
+    "and windows on declared downtime days (automation/downtime.json) are not scored.",
 ]
 
 
@@ -86,6 +88,19 @@ def max_drawdown(series: list[float]) -> float:
     return worst
 
 
+def down_dates() -> set[str]:
+    """Days the computer was unavailable: the few windows that ran then are not normal sessions."""
+    if not DOWNTIME.exists():
+        return set()
+    out = set()
+    for w in json.loads(DOWNTIME.read_text()).get("windows") or []:
+        d, end = datetime.fromisoformat(w["start"]).date(), datetime.fromisoformat(w["end"]).date()
+        while d <= end:
+            out.add(d.isoformat())
+            d += timedelta(days=1)
+    return out
+
+
 def build() -> dict:
     outcomes = {r["window_ts"]: r["outcome"] for r in read("settlements.jsonl")}
     # Arms added later carry their own window set: the windows.jsonl rows written
@@ -107,6 +122,8 @@ def build() -> dict:
                 # Binance-only windows before that are a different arm and are not scored.
                 if a in ran and (a == "taker_v1" or r.get("spot") == "composite"):
                     ran[a].add(r["window_ts"])
+    down = down_dates()
+    ran = {a: {w for w in ws if datetime.fromtimestamp(w).date().isoformat() not in down} for a, ws in ran.items()}
     observed = sorted(set().union(*ran.values()))
     per_window: dict[str, dict[int, float]] = {a: defaultdict(float) for a in ARMS}
     stats: dict[str, dict] = {a: defaultdict(float) for a in ARMS}
