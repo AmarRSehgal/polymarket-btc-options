@@ -94,6 +94,8 @@ def down_dates() -> set[str]:
         return set()
     out = set()
     for w in json.loads(DOWNTIME.read_text()).get("windows") or []:
+        if "pm_btc_paper" in (w.get("not_for") or ()):
+            continue
         d, end = datetime.fromisoformat(w["start"]).date(), datetime.fromisoformat(w["end"]).date()
         while d <= end:
             out.add(d.isoformat())
