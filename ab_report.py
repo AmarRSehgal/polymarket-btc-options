@@ -175,6 +175,11 @@ def build() -> dict:
             "pnl_per_unit": round(total / n, 4) if n else None,
             "pnl_per_unit_ci": [round(lo, 4), round(hi, 4)] if n >= 2 else None,
             "pnl_per_size_c": round(100 * total / st["shares"], 3) if st["shares"] else None,
+            # Analysis only, nothing trades on it: the maker rebate, in bps of notional filled,
+            # that would bring this arm to zero. Negative = already profitable. Makers only --
+            # the taker pays fees and would earn no rebate.
+            "breakeven_rebate_bps": round(-1e4 * total / st["notional"], 1)
+            if st["notional"] and role == "treatment" else None,
             "roi": round(total / st["notional"], 4) if st["notional"] else None,
             "max_drawdown": round(max_drawdown(xs), 2),
             "edge_at_fill_c": round(st["captured_c"] / st["shares"], 3) if st["shares"] and role == "treatment" else None,
