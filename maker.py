@@ -31,6 +31,10 @@ class MakerParams:
     book_stale_s: float = 5.0
     replace_ticks: int = 1
     min_order_life_s: float = 0.5
+    # Aggro close: any position rests in full at the touch on the reducing side (join the
+    # best ask to sell, the best bid to buy) whatever the edge curve says, through every
+    # gate except a stale or one-sided book. Never crosses, so never pays the taker fee.
+    aggro_close: bool = False
 
     def check(self):
         """Pre-flight sanity check. Misconfiguration is fatal."""
@@ -89,6 +93,19 @@ def gate(*, now: float, window_ts: int, strike_ok: bool, vol_ready: bool, fv_c: 
     return None
 
 
+def close_quote(position: float, best_bid: int | None, best_ask: int | None,
+                fv_c: float | None, p: MakerParams) -> Quote | None:
+    """The aggro close: the whole position, joined at the touch. None below the venue's
+    minimum order size, which a real close could not be placed under either."""
+    if abs(position) < p.order_size or best_bid is None or best_ask is None or best_bid >= best_ask:
+        return None
+    side, price, s = ("sell", best_ask, -1) if position > 0 else ("buy", best_bid, 1)
+    if not 1 <= price <= 99:
+        return None
+    ref = fv_c if fv_c is not None else (best_bid + best_ask) / 2.0
+    return Quote(side=side, price_c=price, size=abs(position), tactic="join", edge_c=s * (ref - price))
+
+
 def desired_quotes(fv_c: float, sigma_c: float, position: float, best_bid: int, best_ask: int,
                    p: MakerParams) -> tuple[Quote | None, Quote | None]:
     """The two passive quotes for this instant. Either may be None.
@@ -119,4 +136,6 @@ def desired_quotes(fv_c: float, sigma_c: float, position: float, best_bid: int, 
         tactic = "join" if price == touch else ("improve" if s * (price - touch) > 0 else "rest")
         out.append(Quote(side=side, price_c=price, size=size, tactic=tactic,
                          edge_c=s * (fv_c - price)))
+    if p.aggro_close and position:
+        out[1 if position > 0 else 0] = close_quote(position, best_bid, best_ask, fv_c, p)
     return out[0], out[1]

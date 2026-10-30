@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DATA = HERE / "paper_data"
+DATA = Path(os.environ.get("PAPER_DATA") or HERE / "paper_data")   # point at an archive to re-score it
+PHASE = 2
+PHASE_STARTED = "2026-10-30"
+PHASES = [{"phase": 1, "started": "2026-09-25", "ended": "2026-10-29",
+           "change": "Makers rested only where the edge curve allowed; positions could sit off the touch.",
+           "archive": "polymarket-btc-options/archive/phase1/",
+           "result": "The best scored maker (maker_model_100ms) beats the original taker by $+0.341 per window (95% CI $+0.022 to $+0.643)."}]
 DOWNTIME = Path.home() / "personal" / "automation" / "downtime.json"
 MIN_WINDOWS = 200          # no verdict before this many settled windows, fixed before the first fill
 BOOT = 2000
@@ -39,15 +46,21 @@ for _k in ("mid", "model", "anchored"):
     for _ms in LADDER_MS:
         ARMS[f"maker_{_k}_{_ms}ms"] = ("treatment", f"maker_{_k} at {_ms}ms order latency, re-quoting every 50ms "
                                                    "(latency ladder).")
+AGGRO_NOTE = (" Phase 2: any position also rests in full at the touch on the closing side at all "
+              "times (aggro close), never crossing.")
+ARMS = {k: (r, d + AGGRO_NOTE) if k != "taker_v1" else (r, d) for k, (r, d) in ARMS.items()}
 
 KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence after {MIN_WINDOWS} "
         "settled windows is stopped.",
         "A maker arm with a negative mean 5s markout after 500 fills is being picked off; stopped.",
-        "These were written before the first paper fill (2026-09-25) and are not moved after seeing results."]
+        "Written before the first paper fill (2026-09-25), carried unchanged into phase 2 (2026-10-30), "
+        "and not moved after seeing results."]
 
 CAVEATS = [
     "Every maker reads BTC as a spread-weighted Binance + OKX mid; the taker keeps its original Binance "
-    "feed. Maker windows are counted from 2026-09-25, when they moved to the composite.",
+    "feed.",
+    "Phase 2 started from flat on 2026-10-30 with every maker on the aggro close; phase 1's full record "
+    "is archived in the repo (archive/phase1/) and is not mixed into these numbers.",
     "Paper fills. A resting order joins the back of its price level, goes live 0.4s after it is sent, "
     "and fills only when a real print reaches it; a cancel takes 0.4s and can still be filled meanwhile.",
     "Maker rebates are ignored and the taker pays the published fee, so the maker side is understated.",
@@ -228,6 +241,7 @@ def build() -> dict:
         for ms in LADDER_MS:
             r = by_name[f"{strat}_{ms}ms"]
             rungs.append({"latency_ms": ms, "arm": r["name"], "units": r["units"], "fills": r["fills"],
+                          "breakeven_rebate_bps": r.get("breakeven_rebate_bps"),
                           "pnl": r["pnl"], "pnl_per_unit": r["pnl_per_unit"], "pnl_per_unit_ci": r["pnl_per_unit_ci"],
                           "markout_c": (r["markouts_c"] or {}).get("5")})
         curve.append({"strategy": strat, "markout_horizon_s": 5, "rungs": rungs})
@@ -236,7 +250,8 @@ def build() -> dict:
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
-        "venue": "Polymarket", "paper": True, "started": "2026-09-25",
+        "venue": "Polymarket", "paper": True, "started": PHASE_STARTED,
+        "phase": PHASE, "previous_phases": PHASES,
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
         # Each comparison carries its own verdict once ITS arm has the sample; the ladder
         # arms joined later and say "collecting" until they get there.

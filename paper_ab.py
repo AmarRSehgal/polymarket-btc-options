@@ -35,7 +35,7 @@ import os
 from fairvalue import Anchor, CompositeSpot, prob_sigma_c
 from feed import BinanceBookTicker, OkxBBO
 from main import EdgeFinder
-from maker import MakerParams, desired_quotes, gate
+from maker import MakerParams, close_quote, desired_quotes, gate
 from paper_venue import PaperVenue
 from polymarket import BINANCE_API, WINDOW_SECONDS, PolymarketClient
 from pricer import binary_call_price, twap_effective_seconds
@@ -127,17 +127,33 @@ class MakerArm:
                        uses_binance=True, p=self.p)
         self.gates[blocked or "quoting"] += 1
         if blocked:
+            # The aggro close needs only a live two-sided book and an open window.
+            if (self.p.aggro_close and self.position and blocked not in ("book_stale", "book_one_sided")
+                    and now < self.window_ts + WINDOW_SECONDS):
+                close = close_quote(self.position, book.best_bid, book.best_ask, fv, self.p)
+                if close is not None:
+                    self.gates["aggro_close_" + blocked] += 1
+                    ref = fv if fv is not None else book.mid_c
+                    self._reconcile(now, (close, None) if self.position < 0 else (None, close), ref)
+                    return
             self.venue.cancel_all(now)
             return
         bid, ask = desired_quotes(fv, ctx.sigma_c_comp if comp else ctx.sigma_c, self.position, book.best_bid, book.best_ask, self.p)
-        for side, q in (("buy", bid), ("sell", ask)):
+        self._reconcile(now, (bid, ask), fv)
+
+    def _reconcile(self, now: float, quotes, fv: float | None):
+        for side, q in zip(("buy", "sell"), quotes):
             w = self.venue.working(side)
             if q is None:
                 if w:
                     self.venue.cancel(now, w.oid)
                 continue
             if w is not None:
-                if abs(w.price_c - q.price_c) >= self.p.replace_ticks and now - w.sent_t >= self.p.min_order_life_s:
+                # An aggro close must track the whole position, so a size change re-places it too.
+                stale = abs(w.price_c - q.price_c) >= self.p.replace_ticks or (
+                    self.p.aggro_close and (1 if side == "buy" else -1) * self.position < 0
+                    and abs(w.remaining - q.size) > 1e-9)
+                if stale and now - w.sent_t >= self.p.min_order_life_s:
                     self.venue.cancel(now, w.oid)
                 continue
             # Every size check counts what is still in flight, cancels included.
@@ -209,7 +225,9 @@ class Context:
 class PaperAB:
     def __init__(self):
         DATA.mkdir(exist_ok=True)
-        p = MakerParams()
+        # Phase 2 (from 2026-10-30): every maker carries the aggro close. Phase 1, without
+        # it, is archived under archive/phase1/.
+        p = MakerParams(aggro_close=True)
         p.check()
         self.params = p
         self.ctx = Context()

@@ -5,7 +5,7 @@ import pytest
 
 from clob_ws import TapeTrade, UpBook, up_equivalent
 from fairvalue import Anchor, logit, prob_sigma_c, sigmoid
-from maker import MakerParams, desired_quotes, edge_c, gate
+from maker import MakerParams, close_quote, desired_quotes, edge_c, gate
 from paper_venue import PaperVenue
 
 P = MakerParams()
@@ -173,3 +173,22 @@ def test_sleepwatch_sees_only_time_the_monotonic_clock_missed(monkeypatch):
     clock["wall"] += 600; clock["mono"] += 2          # lid closed ~10 minutes
     assert w.check() == pytest.approx(598.0)
     assert w.check() == 0.0
+
+
+AGGRO = MakerParams(aggro_close=True)
+
+
+def test_aggro_close_joins_the_touch_with_the_whole_position():
+    plain_bid, _ = desired_quotes(50.0, 0.0, 5.0, 45, 55, MakerParams())
+    bid, ask = desired_quotes(50.0, 0.0, 5.0, 45, 55, AGGRO)
+    assert (ask.side, ask.price_c, ask.size, ask.tactic) == ("sell", 55, 5.0, "join")
+    assert bid == plain_bid                                    # adding side unchanged
+    bid, ask = desired_quotes(50.0, 0.0, -10.0, 45, 55, AGGRO)
+    assert (bid.side, bid.price_c, bid.size) == ("buy", 45, 10.0)
+
+
+def test_aggro_close_respects_min_size_and_never_crosses():
+    assert close_quote(0.0, 45, 55, 50.0, AGGRO) is None
+    assert close_quote(3.0, 45, 55, 50.0, AGGRO) is None       # below Polymarket's 5-share minimum
+    assert close_quote(5.0, 55, 55, 50.0, AGGRO) is None       # locked book
+    assert close_quote(5.0, 45, 55, None, AGGRO).price_c == 55  # the ask, never the bid
