@@ -1,0 +1,39 @@
+The best scored maker (maker_anchored_0ms) cannot yet be told apart from the original taker by $-0.074 per window (95% CI $-0.646 to $+0.455). Latency-ladder arms are still collecting.
+arm               fills    size      pnl  $/window              95% CI  c/share   mk5s
+taker_v1           3229  3229.0  -124.51   -0.4495 [-0.9186,+0.0263]    -3.86      -
+maker_mid          3770 15652.5  -507.03   -1.8304 [-2.0607,-1.6054]    -3.24 -3.646
+maker_model        3172 13584.8  -313.99   -1.1335 [-1.2987,-0.9614]    -2.31 -2.573
+maker_anchored     3576 15132.2  -365.98   -1.3212 [-1.5308,-1.1231]    -2.42 -2.566
+maker_mid_0ms      2425 10379.4  -276.93   -0.9998 [-1.1903,-0.8079]    -2.67 -3.103
+maker_mid_100ms    2848 12221.9  -380.12   -1.3723 [-1.5873,-1.1474]    -3.11 -3.381
+maker_mid_200ms    3474 14577.4  -457.23   -1.6507 [-1.9058,-1.4063]    -3.14 -3.324
+maker_mid_300ms    3941 16827.3  -549.72   -1.9845 [-2.2669,-1.7313]    -3.27 -3.526
+maker_mid_400ms    4305 18869.6  -603.81   -2.1798 [-2.4658,-1.9077]    -3.20 -3.565
+maker_model_0ms    2450 10955.4  -159.11   -0.5744 [-0.6935,-0.4571]    -1.45  -1.62
+maker_model_100ms   2720 12161.6  -208.78   -0.7537 [-0.8936,-0.6155]    -1.72 -1.891
+maker_model_200ms   2911 12791.3  -239.01   -0.8629 [-1.0217,-0.7083]    -1.87 -2.226
+maker_model_300ms   3149 13617.4  -283.52   -1.0235 [-1.1851,-0.8561]    -2.08 -2.413
+maker_model_400ms   3322 14490.5  -339.06   -1.2241 [-1.4282,-1.0133]    -2.34 -2.598
+maker_anchored_0ms   2672 12181.0  -145.11   -0.5239 [-0.6923,-0.3675]    -1.19  -1.16
+maker_anchored_100ms   2855 12959.4  -211.12   -0.7622 [-0.9527,-0.5859]    -1.63 -1.232
+maker_anchored_200ms   3163 14187.1  -273.82   -0.9885 [-1.1967,-0.7894]    -1.93 -1.708
+maker_anchored_300ms   3416 15016.1  -324.59   -1.1718 [-1.3824,-0.9718]    -2.16  -1.92
+maker_anchored_400ms   3799 16735.6  -373.72   -1.3492 [-1.5970,-1.1268]    -2.23 -2.215
+  maker_mid - taker_v1: -1.3809 [-1.9577, -0.8208] -> worse
+  maker_model - taker_v1: -0.684 [-1.191, -0.2017] -> worse
+  maker_anchored - taker_v1: -0.8717 [-1.4207, -0.3336] -> worse
+  maker_mid_0ms - taker_v1: -0.5503 [-1.0819, -0.017] -> worse
+  maker_mid_100ms - taker_v1: -0.9228 [-1.4853, -0.3757] -> worse
+  maker_mid_200ms - taker_v1: -1.2012 [-1.8001, -0.6241] -> worse
+  maker_mid_300ms - taker_v1: -1.535 [-2.1445, -0.9437] -> worse
+  maker_mid_400ms - taker_v1: -1.7303 [-2.317, -1.1616] -> worse
+  maker_model_0ms - taker_v1: -0.1249 [-0.6258, 0.3566] -> indistinguishable
+  maker_model_100ms - taker_v1: -0.3042 [-0.8081, 0.1946] -> indistinguishable
+  maker_model_200ms - taker_v1: -0.4134 [-0.9352, 0.095] -> indistinguishable
+  maker_model_300ms - taker_v1: -0.574 [-1.0836, -0.0713] -> worse
+  maker_model_400ms - taker_v1: -0.7746 [-1.2947, -0.2577] -> worse
+  maker_anchored_0ms - taker_v1: -0.0744 [-0.6458, 0.4552] -> indistinguishable
+  maker_anchored_100ms - taker_v1: -0.3127 [-0.8665, 0.2136] -> indistinguishable
+  maker_anchored_200ms - taker_v1: -0.539 [-1.1278, -0.0021] -> worse
+  maker_anchored_300ms - taker_v1: -0.7223 [-1.2837, -0.1777] -> worse
+  maker_anchored_400ms - taker_v1: -0.8997 [-1.4811, -0.3526] -> worse

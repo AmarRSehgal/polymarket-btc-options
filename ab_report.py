@@ -21,12 +21,19 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("PAPER_DATA") or HERE / "paper_data")   # point at an archive to re-score it
-PHASE = 2
-PHASE_STARTED = "2026-10-30"
+PHASE = 3
+PHASE_STARTED = "2026-11-03"
+PHASE_RULE = ("every maker quotes normally, goes reduce-only once its position could not be unwound in time "
+              "(5x the time to trade it at 10% of the tape's volume), and rests what is left at the touch "
+              "to close in the last 60 seconds")
 PHASES = [{"phase": 1, "started": "2026-09-25", "ended": "2026-10-29",
-           "change": "Makers rested only where the edge curve allowed; positions could sit off the touch.",
+           "change": "no aggro close; makers rested only where the edge curve allowed",
            "archive": "polymarket-btc-options/archive/phase1/",
-           "result": "The best scored maker (maker_model_100ms) beats the original taker by $+0.341 per window (95% CI $+0.022 to $+0.643)."}]
+           "result": "The best scored maker (maker_model_100ms) beats the original taker by $+0.341 per window (95% CI $+0.022 to $+0.643)."},
+          {"phase": 2, "started": "2026-10-30", "ended": "2026-11-02",
+           "change": "aggro close at all times: any position rested at the touch to close",
+           "archive": "polymarket-btc-options/archive/phase2/",
+           "result": "The best scored maker (maker_anchored_0ms) cannot yet be told apart from the original taker by $-0.074 per window (95% CI $-0.646 to $+0.455). Every maker tripped both kill criteria: negative PnL per window at 95% confidence after 200 windows, and a negative 5s markout."}]
 DOWNTIME = Path.home() / "personal" / "automation" / "downtime.json"
 MIN_WINDOWS = 200          # no verdict before this many settled windows, fixed before the first fill
 BOOT = 2000
@@ -46,9 +53,8 @@ for _k in ("mid", "model", "anchored"):
     for _ms in LADDER_MS:
         ARMS[f"maker_{_k}_{_ms}ms"] = ("treatment", f"maker_{_k} at {_ms}ms order latency, re-quoting every 50ms "
                                                    "(latency ladder).")
-AGGRO_NOTE = (" Phase 2: any position also rests in full at the touch on the closing side at all "
-              "times (aggro close), never crossing.")
-ARMS = {k: (r, d + AGGRO_NOTE) if k != "taker_v1" else (r, d) for k, (r, d) in ARMS.items()}
+ARMS = {k: (r, d + f" Phase {PHASE}: {PHASE_RULE.removeprefix('every maker ')}.") if k != "taker_v1" else (r, d)
+        for k, (r, d) in ARMS.items()}
 
 KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence after {MIN_WINDOWS} "
         "settled windows is stopped.",
@@ -59,8 +65,8 @@ KILL = [f"A maker arm whose mean PnL per window is below zero at 95% confidence 
 CAVEATS = [
     "Every maker reads BTC as a spread-weighted Binance + OKX mid; the taker keeps its original Binance "
     "feed.",
-    "Phase 2 started from flat on 2026-10-30 with every maker on the aggro close; phase 1's full record "
-    "is archived in the repo (archive/phase1/) and is not mixed into these numbers.",
+    f"Phase {PHASE} started from flat on {PHASE_STARTED}: {PHASE_RULE}. Phases 1 and 2 are archived in "
+    "the repo (archive/phase1/, archive/phase2/) with their raw records and are not mixed into these numbers.",
     "Paper fills. A resting order joins the back of its price level, goes live 0.4s after it is sent, "
     "and fills only when a real print reaches it; a cancel takes 0.4s and can still be filled meanwhile.",
     "Maker rebates are ignored and the taker pays the published fee, so the maker side is understated.",
@@ -251,7 +257,7 @@ def build() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment": "Polymarket BTC 5-minute binaries: taker v1 vs passive makers",
         "venue": "Polymarket", "paper": True, "started": PHASE_STARTED,
-        "phase": PHASE, "previous_phases": PHASES,
+        "phase": PHASE, "phase_rule": PHASE_RULE, "previous_phases": PHASES,
         "unit": "window", "min_units_for_verdict": MIN_WINDOWS,
         # Each comparison carries its own verdict once ITS arm has the sample; the ladder
         # arms joined later and say "collecting" until they get there.

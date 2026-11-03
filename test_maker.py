@@ -5,7 +5,7 @@ import pytest
 
 from clob_ws import TapeTrade, UpBook, up_equivalent
 from fairvalue import Anchor, logit, prob_sigma_c, sigmoid
-from maker import MakerParams, close_quote, desired_quotes, edge_c, gate
+from maker import NORMAL, REDUCE_ONLY, UNWIND, MakerParams, close_quote, desired_quotes, edge_c, gate, phase3_mode, phase3_quotes
 from paper_venue import PaperVenue
 
 P = MakerParams()
@@ -175,20 +175,34 @@ def test_sleepwatch_sees_only_time_the_monotonic_clock_missed(monkeypatch):
     assert w.check() == 0.0
 
 
-AGGRO = MakerParams(aggro_close=True)
+
+def test_phase3_mode_normal_reduce_only_unwind():
+    p = MakerParams()
+    assert phase3_mode(0.0, 200, 1.0, p) == NORMAL                 # flat: nothing to unwind
+    assert phase3_mode(5.0, 200, 10.0, p) == NORMAL                # 5 sh at 10% of 10 sh/s: 5s x 5 = 25s < 200s
+    assert phase3_mode(5.0, 100, 2.0, p) == REDUCE_ONLY            # 5 sh at 10% of 2 sh/s = 25s, x 5 = 125s > 100s
+    assert phase3_mode(5.0, 200, 0.0, p) == REDUCE_ONLY            # no measured volume: never add to a position
+    assert phase3_mode(0.0, 59, 10.0, p) == UNWIND and phase3_mode(5.0, 59, 10.0, p) == UNWIND
 
 
-def test_aggro_close_joins_the_touch_with_the_whole_position():
-    plain_bid, _ = desired_quotes(50.0, 0.0, 5.0, 45, 55, MakerParams())
-    bid, ask = desired_quotes(50.0, 0.0, 5.0, 45, 55, AGGRO)
-    assert (ask.side, ask.price_c, ask.size, ask.tactic) == ("sell", 55, 5.0, "join")
-    assert bid == plain_bid                                    # adding side unchanged
-    bid, ask = desired_quotes(50.0, 0.0, -10.0, 45, 55, AGGRO)
-    assert (bid.side, bid.price_c, bid.size) == ("buy", 45, 10.0)
+def test_phase3_reduce_only_keeps_the_exit_and_drops_the_add():
+    p = MakerParams()
+    plain_bid, plain_ask = desired_quotes(50.0, 0.0, 5.0, 45, 55, p)
+    bid, ask = phase3_quotes(50.0, 0.0, 5.0, 45, 55, p, REDUCE_ONLY)
+    assert bid is None and ask == plain_ask                         # exit still priced by the edge curve
 
 
-def test_aggro_close_respects_min_size_and_never_crosses():
-    assert close_quote(0.0, 45, 55, 50.0, AGGRO) is None
-    assert close_quote(3.0, 45, 55, 50.0, AGGRO) is None       # below Polymarket's 5-share minimum
-    assert close_quote(5.0, 55, 55, 50.0, AGGRO) is None       # locked book
-    assert close_quote(5.0, 45, 55, None, AGGRO).price_c == 55  # the ask, never the bid
+def test_phase3_unwind_joins_the_touch_with_the_whole_position():
+    p = MakerParams()
+    bid, ask = phase3_quotes(50.0, 0.0, 5.0, 45, 55, p, UNWIND)
+    assert bid is None and (ask.side, ask.price_c, ask.size, ask.tactic) == ("sell", 55, 5.0, "join")
+    bid, ask = phase3_quotes(50.0, 0.0, -10.0, 45, 55, p, UNWIND)
+    assert ask is None and (bid.side, bid.price_c, bid.size) == ("buy", 45, 10.0)
+    assert phase3_quotes(50.0, 0.0, 0.0, 45, 55, p, UNWIND) == (None, None)
+
+
+def test_close_respects_min_size_and_never_crosses():
+    p = MakerParams()
+    assert close_quote(3.0, 45, 55, 50.0, p) is None                # below Polymarket's 5-share minimum
+    assert close_quote(5.0, 55, 55, 50.0, p) is None                # locked book
+    assert close_quote(5.0, 45, 55, None, p).price_c == 55          # the ask, never the bid

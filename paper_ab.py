@@ -35,7 +35,7 @@ import os
 from fairvalue import Anchor, CompositeSpot, prob_sigma_c
 from feed import BinanceBookTicker, OkxBBO
 from main import EdgeFinder
-from maker import MakerParams, close_quote, desired_quotes, gate
+from maker import UNWIND, MakerParams, close_quote, gate, phase3_mode, phase3_quotes
 from paper_venue import PaperVenue
 from polymarket import BINANCE_API, WINDOW_SECONDS, PolymarketClient
 from pricer import binary_call_price, twap_effective_seconds
@@ -96,6 +96,7 @@ class MakerArm:
         self.window_ts = 0
         self.position = 0.0
         self.fills = 0
+        self.mode = "normal"
 
     def reset(self, window_ts: int):
         self.venue = PaperVenue(ack_s=self.latency_s, cancel_s=self.latency_s)
@@ -126,19 +127,24 @@ class MakerArm:
                        binance_updated=ctx.comp_updated if comp else ctx.bbo.updated,
                        uses_binance=True, p=self.p)
         self.gates[blocked or "quoting"] += 1
+        remaining = self.window_ts + WINDOW_SECONDS - now
+        rate = ctx.vol_rate or ctx.window_volume / max(now - self.window_ts, 1.0)
+        self.mode = phase3_mode(self.position, remaining, rate, self.p)
         if blocked:
-            # The aggro close needs only a live two-sided book and an open window.
-            if (self.p.aggro_close and self.position and blocked not in ("book_stale", "book_one_sided")
-                    and now < self.window_ts + WINDOW_SECONDS):
+            # The end-of-window unwind needs only a live two-sided book and an open window.
+            if (self.mode == UNWIND and self.position and blocked not in ("book_stale", "book_one_sided")
+                    and remaining > 0):
                 close = close_quote(self.position, book.best_bid, book.best_ask, fv, self.p)
                 if close is not None:
-                    self.gates["aggro_close_" + blocked] += 1
+                    self.gates["unwind_" + blocked] += 1
                     ref = fv if fv is not None else book.mid_c
                     self._reconcile(now, (close, None) if self.position < 0 else (None, close), ref)
                     return
             self.venue.cancel_all(now)
             return
-        bid, ask = desired_quotes(fv, ctx.sigma_c_comp if comp else ctx.sigma_c, self.position, book.best_bid, book.best_ask, self.p)
+        bid, ask = phase3_quotes(fv, ctx.sigma_c_comp if comp else ctx.sigma_c, self.position,
+                                 book.best_bid, book.best_ask, self.p, self.mode)
+        self.gates["mode_" + self.mode] += 1
         self._reconcile(now, (bid, ask), fv)
 
     def _reconcile(self, now: float, quotes, fv: float | None):
@@ -149,9 +155,9 @@ class MakerArm:
                     self.venue.cancel(now, w.oid)
                 continue
             if w is not None:
-                # An aggro close must track the whole position, so a size change re-places it too.
+                # The unwind must track the whole position, so a size change re-places it too.
                 stale = abs(w.price_c - q.price_c) >= self.p.replace_ticks or (
-                    self.p.aggro_close and (1 if side == "buy" else -1) * self.position < 0
+                    self.mode == UNWIND and (1 if side == "buy" else -1) * self.position < 0
                     and abs(w.remaining - q.size) > 1e-9)
                 if stale and now - w.sent_t >= self.p.min_order_life_s:
                     self.venue.cancel(now, w.oid)
@@ -196,6 +202,8 @@ class Context:
         self.model_p: float | None = None
         self.sigma_c = 0.0
         self.pending_markouts: list[dict] = []
+        self.window_volume = 0.0      # shares printed this window, both tokens in Up terms
+        self.vol_rate = 0.0           # shares per second, averaged over completed windows
         self.pending_settle: set[int] = set()
 
     @property
@@ -225,9 +233,10 @@ class Context:
 class PaperAB:
     def __init__(self):
         DATA.mkdir(exist_ok=True)
-        # Phase 2 (from 2026-10-30): every maker carries the aggro close. Phase 1, without
-        # it, is archived under archive/phase1/.
-        p = MakerParams(aggro_close=True)
+        # Phase 3 (from 2026-11-03): quote normally, reduce-only once a position could not be
+        # unwound in time, aggro-close the remainder in the last minute (maker.phase3_mode).
+        # Phases 1 and 2 are archived under archive/.
+        p = MakerParams()
         p.check()
         self.params = p
         self.ctx = Context()
@@ -262,6 +271,7 @@ class PaperAB:
                     self.ctx.pending_settle.add(r["window_ts"])
 
     def _on_trade(self, tr: TapeTrade):
+        self.ctx.window_volume += tr.size
         for arm in self.arms:
             arm.on_trade(tr, self.ctx)
 
@@ -288,6 +298,10 @@ class PaperAB:
                 await asyncio.sleep(1)
             ctx.market, ctx.strike = market, strike
             ctx.stream = MarketStream(market.up_token, market.down_token, self._on_trade)
+            if ctx.window_volume > 0:
+                w_rate = ctx.window_volume / WINDOW_SECONDS
+                ctx.vol_rate = w_rate if not ctx.vol_rate else 0.7 * ctx.vol_rate + 0.3 * w_rate
+            ctx.window_volume = 0.0
             for arm in self.arms:
                 arm.reset(wts)
             ctx.pending_settle.add(wts)

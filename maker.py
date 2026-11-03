@@ -31,10 +31,14 @@ class MakerParams:
     book_stale_s: float = 5.0
     replace_ticks: int = 1
     min_order_life_s: float = 0.5
-    # Aggro close: any position rests in full at the touch on the reducing side (join the
-    # best ask to sell, the best bid to buy) whatever the edge curve says, through every
-    # gate except a stale or one-sided book. Never crosses, so never pays the taker fee.
-    aggro_close: bool = False
+    # Phase 3: quote normally, stop adding once a position could not be unwound in time, and
+    # aggro-close what is left at the end. Reduce-only starts when the window has less than
+    # unwind_multiple x the time it takes to trade the position at adv_participation of the
+    # tape's volume; the last unwind_s seconds rest the whole position at the touch to close,
+    # whatever the edge curve says and through every gate but a stale or one-sided book.
+    unwind_s: float = 60.0
+    adv_participation: float = 0.10
+    unwind_multiple: float = 5.0
 
     def check(self):
         """Pre-flight sanity check. Misconfiguration is fatal."""
@@ -136,6 +140,29 @@ def desired_quotes(fv_c: float, sigma_c: float, position: float, best_bid: int, 
         tactic = "join" if price == touch else ("improve" if s * (price - touch) > 0 else "rest")
         out.append(Quote(side=side, price_c=price, size=size, tactic=tactic,
                          edge_c=s * (fv_c - price)))
-    if p.aggro_close and position:
-        out[1 if position > 0 else 0] = close_quote(position, best_bid, best_ask, fv_c, p)
     return out[0], out[1]
+
+
+NORMAL, REDUCE_ONLY, UNWIND = "normal", "reduce_only", "unwind"
+
+
+def phase3_mode(position: float, remaining_s: float, vol_rate: float, p: MakerParams) -> str:
+    """normal / reduce_only / unwind for this instant. `vol_rate` is shares per second on the tape."""
+    if remaining_s < p.unwind_s:
+        return UNWIND
+    if position and (vol_rate <= 0 or
+                     remaining_s < p.unwind_multiple * abs(position) / (p.adv_participation * vol_rate)):
+        return REDUCE_ONLY
+    return NORMAL
+
+
+def phase3_quotes(fv_c: float, sigma_c: float, position: float, best_bid: int, best_ask: int,
+                  p: MakerParams, mode: str) -> tuple[Quote | None, Quote | None]:
+    if mode == UNWIND:
+        close = close_quote(position, best_bid, best_ask, fv_c, p)
+        return (close, None) if position < 0 else (None, close)
+    bid, ask = desired_quotes(fv_c, sigma_c, position, best_bid, best_ask, p)
+    if mode == REDUCE_ONLY:
+        bid = None if position > 0 else bid
+        ask = None if position < 0 else ask
+    return bid, ask
