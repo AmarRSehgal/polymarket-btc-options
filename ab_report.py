@@ -22,7 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("PAPER_DATA") or HERE / "paper_data")   # point at an archive to re-score it
 PHASE = 3
-PHASE_STARTED = "2026-11-03"
+PHASE_STARTED = "2026-11-04"
 PHASE_RULE = ("every maker quotes normally, goes reduce-only once its position could not be unwound in time "
               "(5x the time to trade it at 10% of the tape's volume), and rests what is left at the touch "
               "to close in the last 60 seconds")

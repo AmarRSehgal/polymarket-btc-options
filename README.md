@@ -24,9 +24,9 @@ Live edge detection for Polymarket's BTC 5-minute Up/Down markets using Black-Sc
 > See [Does the edge exist?](#does-the-edge-exist) before trusting any number
 > this tool prints. It remains a simulator and places no real orders.
 
-## Paper A/B: taker against makers (running since 2026-09-25; phase 3 since 2026-11-03)
+## Paper A/B: taker against makers (running since 2026-09-25; phase 3 since 2026-11-04)
 
-**Phase 3 from 2026-11-03.** Every maker arm, ladders included, quotes normally, goes reduce-only once its position could not be unwound in time (5x the time to trade it at 10% of volume), and rests what is left at the touch to close only in a final window. Phase 1 (2026-09-25..10-29, no aggro close) and phase 2 (2026-10-30..11-02, aggro close at all times, stopped on its kill criteria) are archived with their raw records and final reports in `archive/`; each README says what happened and how to re-score it. Each report gives every maker arm's break-even maker rebate in bps of notional.
+**Phase 3 from 2026-11-04.** Restarted from flat on a new machine; its first session (2026-11-03, on the old machine) was discarded, not scored. Every maker arm, ladders included, quotes normally, goes reduce-only once its position could not be unwound in time (5x the time to trade it at 10% of volume), and rests what is left at the touch to close only in a final window. Phase 1 (2026-09-25..10-29, no aggro close) and phase 2 (2026-10-30..11-02, aggro close at all times, stopped on its kill criteria) are archived with their raw records and final reports in `archive/`; each README says what happened and how to re-score it. Each report gives every maker arm's break-even maker rebate in bps of notional.
 
 
 The finding above is about *taking*. Resting orders pay no fee here

@@ -233,7 +233,7 @@ class Context:
 class PaperAB:
     def __init__(self):
         DATA.mkdir(exist_ok=True)
-        # Phase 3 (from 2026-11-03): quote normally, reduce-only once a position could not be
+        # Phase 3 (from 2026-11-04): quote normally, reduce-only once a position could not be
         # unwound in time, aggro-close the remainder in the last minute (maker.phase3_mode).
         # Phases 1 and 2 are archived under archive/.
         p = MakerParams()
