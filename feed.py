@@ -12,7 +12,7 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-BINANCE_WS_SPOT = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
+BINANCE_WS_SPOT = "wss://data-stream.binance.vision/ws/btcusdt@aggTrade"
 BINANCE_WS_FUTURES = "wss://fstream.binance.com/ws/btcusdt@aggTrade"
 
 
@@ -64,7 +64,7 @@ class BinanceFeed:
         self._running = False
 
 
-BINANCE_WS_BOOK = "wss://stream.binance.com:9443/ws/btcusdt@bookTicker"
+BINANCE_WS_BOOK = "wss://data-stream.binance.vision/ws/btcusdt@bookTicker"
 
 
 class BinanceBookTicker:

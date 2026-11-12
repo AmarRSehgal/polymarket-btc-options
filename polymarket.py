@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
-BINANCE_API = "https://api.binance.com"
+BINANCE_API = "https://data-api.binance.vision"  # api.binance.com 451s US IPs; same data
 
 WINDOW_SECONDS = 300
 
