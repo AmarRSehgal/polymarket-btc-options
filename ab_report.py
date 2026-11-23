@@ -192,6 +192,9 @@ def build() -> dict:
             "name": a, "role": role, "description": desc,
             "units": n, "active_units": sum(1 for x in xs if x != 0.0),
             "fills": int(st["fills"]), "size": round(st["shares"], 1),
+            # Dollars put at risk across all fills (price for a buy, 100-price for a sell):
+            # the traded volume, which fill counts hide -- a maker fill can be one share or 50.
+            "notional": round(st["notional"], 2),
             "pnl": round(total, 2),
             "pnl_per_unit": round(total / n, 4) if n else None,
             "pnl_per_unit_ci": [round(lo, 4), round(hi, 4)] if n >= 2 else None,
